@@ -1,0 +1,57 @@
+# Publica o app no GitHub Pages a cada push na main.
+#
+# O app é uma página só, em HTML/JS puro — não tem build. O Pages serve em
+# subcaminho (/domo/), e por isso TODO caminho no index.html precisa ser
+# relativo (./config.js, não /config.js). O service worker também deriva o
+# escopo de self.location, então funciona em subcaminho sem mudança.
+name: Publicar no GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Conferir que o backend não é mais o Netlify
+        run: |
+          if grep -q "netlify/functions" config.js; then
+            echo "config.js ainda aponta para o Netlify — corrija antes de publicar."
+            exit 1
+          fi
+          echo "config.js aponta para o Supabase ✅"
+
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      # Sobe só o que o navegador precisa: nada de netlify/, scripts/ ou backup.
+      - name: Montar a pasta do site
+        run: |
+          mkdir -p _site
+          cp -r index.html styles.css *.js libs icons logo-*.png manifest.webmanifest _site/
+          rm -f _site/sw.js.bak
+          ls -la _site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,18 @@
+node_modules/
+.DS_Store
+# O backup tem os dados da empresa — fica só no computador.
+backup-migracao/
+.env
+.env.local
+
+# TODA credencial: padrão largo de propósito. Já aconteceu de um arquivo novo
+# (.key-service_role) escapar de uma lista de nomes exatos e ir parar no push.
+.key-*
+.token-*
+.*-token
+.*-key
+.senha-*
+.service-role
+.sbp-token
+supabase/.temp/
+.netlify/

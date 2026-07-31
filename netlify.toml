@@ -1,0 +1,24 @@
+[build]
+  publish = "."
+
+[functions]
+  directory = "netlify/functions"
+
+# Backup diário dos dados (snapshot JSON nos Blobs, 60 dias de histórico)
+# e limpeza da lixeira/log antigos.
+[functions."rotina"]
+  schedule = "@daily"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "same-origin"
+
+# O app é uma página só com rotas em #hash — nada a reescrever,
+# mas garante que qualquer caminho caia no index.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

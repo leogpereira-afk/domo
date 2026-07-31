@@ -1,0 +1,18 @@
+# Projeto Supabase da Domo Construtora. "project_id" aqui é só um apelido local
+# usado pela CLI — não precisa bater com o Project Ref real do supabase.com.
+project_id = "domo-construtora"
+
+# verify_jwt = false em TODAS: o navegador manda um preflight CORS (OPTIONS)
+# sem token, e o gateway do Supabase barraria antes de o código rodar. A
+# autorização é feita DENTRO de cada função (x-token + x-senha), exatamente como
+# a Netlify Function fazia. Trocar isso para true derruba o app inteiro.
+[functions.domo-nucleo]
+verify_jwt = false
+
+[functions.domo-acervo]
+verify_jwt = false
+
+# Roda sozinha pelo pg_cron, sem ninguém logado: a entrada é o ROTINA_TOKEN,
+# conferido dentro da própria função.
+[functions.domo-rotina]
+verify_jwt = false

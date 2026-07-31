@@ -1,0 +1,9 @@
+{
+  "name": "domo-gestao",
+  "version": "1.0.0",
+  "description": "Sistema de gestão da Domo Construtora — compras, projetos e documentos (Netlify Functions + Blobs, offline-first)",
+  "private": true,
+  "dependencies": {
+    "@netlify/blobs": "^10.7.9"
+  }
+}
