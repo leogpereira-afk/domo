@@ -70,6 +70,43 @@ export async function apagarDeVez(colecao: string, id: string): Promise<void> {
   await db.from("domo_registros").delete().eq("colecao", colecao).eq("id", id);
 }
 
+// Varre registros de UMA coleção, TODOS de uma vez (paginado). Coleta o
+// conjunto inteiro em memória ANTES de devolver — a rotina apaga durante o
+// laço, e paginar por offset enquanto a tabela encolhe pularia linhas. É por
+// isso que a rotina não pode iterar direto no PostgREST com .range().
+export async function lerColecaoBruta(
+  colecao: string, colunas = "id, registro", filtroApagado?: boolean,
+): Promise<any[]> {
+  const saida: any[] = [];
+  let de = 0;
+  for (;;) {
+    let q = db.from("domo_registros").select(colunas).eq("colecao", colecao);
+    if (filtroApagado !== undefined) q = q.eq("apagado", filtroApagado);
+    const { data, error } = await q.range(de, de + 999);
+    if (error) throw new Error("lerColecaoBruta(" + colecao + "): " + error.message);
+    for (const l of (data || [])) saida.push(l);
+    if (!data || data.length < 1000) break;
+    de += 1000;
+  }
+  return saida;
+}
+
+// Todos os registros que estão na lixeira, de QUALQUER coleção (paginado,
+// coletado antes de apagar).
+export async function lerApagados(): Promise<any[]> {
+  const saida: any[] = [];
+  let de = 0;
+  for (;;) {
+    const { data, error } = await db.from("domo_registros")
+      .select("colecao, id, registro").eq("apagado", true).range(de, de + 999);
+    if (error) throw new Error("lerApagados: " + error.message);
+    for (const l of (data || [])) saida.push(l);
+    if (!data || data.length < 1000) break;
+    de += 1000;
+  }
+  return saida;
+}
+
 /* ── cfg (linha única) ─────────────────────────────────────────────────────── */
 export async function lerCfgBruta(): Promise<any> {
   const { data } = await db.from("domo_cfg").select("config").eq("id", true).maybeSingle();

@@ -15,8 +15,18 @@ import { json } from "../_shared/cors.ts";
 import { NOMES_COLECOES } from "../_shared/colecoes.ts";
 import { cfgSemSegredo } from "../_shared/acesso.ts";
 import {
-  db, agora, lerUm, lerTudo, lerCfgBruta, lerNumeracao, gravarBackup,
-  apagarArquivo, apagarDeVez, registrarLog,
+  db,
+  agora,
+  lerUm,
+  lerTudo,
+  lerCfgBruta,
+  lerNumeracao,
+  gravarBackup,
+  apagarArquivo,
+  apagarDeVez,
+  registrarLog,
+  lerColecaoBruta,
+  lerApagados,
 } from "../_shared/dados.ts";
 
 const DIAS_BACKUP = 60;
@@ -56,8 +66,10 @@ Deno.serve(async (req) => {
     // número de documento que já foi para fornecedor.
     const seq = await lerNumeracao();
     // Inventário dos arquivos: sem ele ninguém sabe quais plantas existiam.
-    const { data: metas } = await db.from("domo_registros").select("registro").eq("colecao", META);
-    const arquivos = (metas || []).map((l: any) => l.registro);
+    // Paginado: uma varredura sem .range() para em 1000 e o backup ficaria
+    // incompleto sem avisar.
+    const metas = await lerColecaoBruta(META, "registro");
+    const arquivos = metas.map((l: any) => l.registro);
 
     await gravarBackup(hoje, { em: agora(), cfg: copia, registros, seq, arquivos });
     resultado.registros = registros.length;
@@ -83,9 +95,11 @@ Deno.serve(async (req) => {
   //    com os arquivos que só aquele registro usava.
   try {
     const limite = diasAtras(DIAS_LIXEIRA);
-    const { data } = await db.from("domo_registros").select("colecao, id, registro").eq("apagado", true);
+    // Coleta TUDO antes de apagar: paginar por offset enquanto se apaga da
+    // mesma tabela pularia linhas (o conjunto encolhe sob o cursor).
+    const data = await lerApagados();
     let apagados = 0;
-    for (const linha of (data || [])) {
+    for (const linha of data) {
       const o = linha.registro as any;
       if (!o.apagadoEm || o.apagadoEm >= limite) continue;
       for (const idArq of arquivosDoRegistro(o)) {
@@ -109,12 +123,12 @@ Deno.serve(async (req) => {
     const usados = new Set<string>();
     for (const o of registros) for (const id of arquivosDoRegistro(o)) usados.add(id);
 
-    const { data: metas } = await db.from("domo_registros").select("id, registro").eq("colecao", META);
+    const metas = await lerColecaoBruta(META, "id, registro");
     // Carência de 1 dia: arquivo recém-enviado pode estar esperando o registro
     // que ainda está na fila de um celular sem sinal.
     const ontem = diasAtras(1);
     let orfaos = 0;
-    for (const l of (metas || [])) {
+    for (const l of metas) {
       const m = l.registro as any;
       if (usados.has(l.id)) continue;
       if (m && m.criadoEm && m.criadoEm > ontem) continue;

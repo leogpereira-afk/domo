@@ -18,7 +18,7 @@ Estado: **backend novo no ar e testado. O Netlify continua servindo a equipe at�
 | Edge Function `rotina` | `supabase/functions/rotina/` | ✅ backup + faxina diária |
 | Migração dos dados | `scripts/migrar-para-supabase.mjs` | ✅ com portão de contagem |
 | Deploy no Pages | `.github/workflows/deploy.yml` | ✅ |
-| Config do cliente | `config.supabase.js` | ✅ falta o project ref |
+| Config do cliente | `config.js` | ✅ falta o project ref |
 
 ## De-para
 

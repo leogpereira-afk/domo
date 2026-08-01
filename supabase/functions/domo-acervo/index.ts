@@ -14,8 +14,16 @@
 import { json, preflight } from "../_shared/cors.ts";
 import { identificar, podeFazer } from "../_shared/acesso.ts";
 import {
-  db, agora, idNovo, lerUm, gravarUm, lerCfgBruta, subirParte, baixarParte,
-  apagarArquivo, apagarDeVez,
+  agora,
+  idNovo,
+  lerUm,
+  gravarUm,
+  lerCfgBruta,
+  subirParte,
+  baixarParte,
+  apagarArquivo,
+  apagarDeVez,
+  lerColecaoBruta,
 } from "../_shared/dados.ts";
 
 // Coleção interna: guarda o "meta" de cada arquivo (nome, tamanho, partes).
@@ -68,7 +76,11 @@ Deno.serve(async (req) => {
         const meta = {
           id,
           nome: String(body.nome || "arquivo").slice(0, 200),
-          mime: String(body.tipo || "application/octet-stream").slice(0, 100),
+          // O CLIENTE manda o tipo no campo 'mime' (store.js). O porte estava
+          // lendo 'body.tipo' — que nunca chega — e gravava tudo como
+          // octet-stream, então o PDF baixava sem abrir. `?? body.tipo` deixa
+          // tolerante a qualquer chamador futuro.
+          mime: String(body.mime ?? body.tipo ?? "application/octet-stream").slice(0, 100),
           tamanho: Number(body.tamanho) || 0,
           partes: Math.max(1, Number(body.partes) || 1),
           recebidas: 0,
@@ -81,12 +93,18 @@ Deno.serve(async (req) => {
       }
 
       case "parte": {
-        const { id, n, dados } = body;
+        const { id, dados } = body;
+        // O CLIENTE manda o índice do pedaço no campo 'i' (store.js). O porte
+        // lia 'body.n' — que chega vazio — e Number(undefined) vira NaN: TODA
+        // parte era gravada na mesma chave 'id/pNaN' (uma por cima da outra) e
+        // nenhum upload concluía. Aceita os dois nomes, mas exige um número.
+        const idx = Number(body.i ?? body.n);
+        if (!Number.isInteger(idx) || idx < 0) return json({ ok: false, error: "Índice de parte inválido" }, 400);
         const meta = await lerUm(META, id);
         if (!meta) return json({ ok: false, error: "Arquivo não encontrado" }, 404);
         if (typeof dados !== "string") return json({ ok: false, error: "Parte vazia" }, 400);
-        await subirParte(id + "/p" + Number(n), b64ParaBytes(dados));
-        meta.recebidas = Math.max(Number(meta.recebidas) || 0, Number(n) + 1);
+        await subirParte(id + "/p" + idx, b64ParaBytes(dados));
+        meta.recebidas = Math.max(Number(meta.recebidas) || 0, idx + 1);
         await gravarUm(META, id, meta);
         return json({ ok: true, recebidas: meta.recebidas, partes: meta.partes });
       }
@@ -94,8 +112,12 @@ Deno.serve(async (req) => {
       case "finalizar": {
         const meta = await lerUm(META, body.id);
         if (!meta) return json({ ok: false, error: "Arquivo não encontrado" }, 404);
-        if (meta.recebidas < meta.partes) {
-          return json({ ok: false, error: "Faltam partes (" + meta.recebidas + " de " + meta.partes + ")" }, 400);
+        // Não confia só no contador: confere pedaço por pedaço no Storage, como
+        // o backend antigo fazia. Um contador certo com uma parte que não subiu
+        // deixaria o arquivo "pronto" e corrompido.
+        for (let i = 0; i < (meta.partes || 1); i++) {
+          const p = await baixarParte(body.id + "/p" + i);
+          if (!p) return json({ ok: false, error: "Falta a parte " + i + " de " + meta.partes }, 400);
         }
         meta.pronto = true;
         meta.concluidoEm = agora();
@@ -110,9 +132,11 @@ Deno.serve(async (req) => {
       }
 
       case "baixarParte": {
+        const idx = Number(body.i ?? body.n);
+        if (!Number.isInteger(idx) || idx < 0) return json({ ok: false, error: "Índice de parte inválido" }, 400);
         const meta = await lerUm(META, body.id);
         if (!meta) return json({ ok: false, error: "Arquivo não encontrado" }, 404);
-        const bytes = await baixarParte(body.id + "/p" + Number(body.n));
+        const bytes = await baixarParte(body.id + "/p" + idx);
         if (!bytes) return json({ ok: false, error: "Parte não encontrada" }, 404);
         return json({ ok: true, dados: bytesParaB64(bytes), partes: meta.partes, meta });
       }
@@ -129,10 +153,11 @@ Deno.serve(async (req) => {
 
       case "uso": {
         // Conta pelo metadado, não pelo Storage: listar pasta por pasta seria
-        // uma chamada por arquivo, e o tamanho já está guardado aqui.
-        const { data } = await db.from("domo_registros").select("registro").eq("colecao", META);
+        // uma chamada por arquivo, e o tamanho já está guardado aqui. Paginado
+        // para não parar em 1000 arquivos.
+        const linhas = await lerColecaoBruta(META, "registro");
         let bytes = 0, arquivos = 0;
-        for (const l of (data || [])) {
+        for (const l of linhas) {
           const m = l.registro as any;
           if (!m || !m.pronto) continue;
           bytes += Number(m.tamanho) || 0;

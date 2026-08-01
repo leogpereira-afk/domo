@@ -1,7 +1,7 @@
 /* Service worker — deixa o app abrir sem internet (a obra costuma ter sinal ruim).
    Regra do kit: SUBIR o número do CACHE a cada publicação, senão o navegador
    continua servindo o arquivo velho. */
-const CACHE = 'domo-shell-v35';
+const CACHE = 'domo-shell-v36';
 const ARQUIVOS = [
   './', './index.html', './styles.css', './config.js', './store.js', './ui.js',
   './pdf.js', './compras.js', './acervo.js', './cotacao.js', './cronograma.js', './qualificacao.js', './servicos.js', './app.js',
