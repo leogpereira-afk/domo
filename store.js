@@ -302,6 +302,12 @@ async function puxar() {
           novo[col] = novo[col].filter((x) => x.id !== local.id);
           novo[col].push(local);
         } else if (!vindos.has(local.id) && recente(local)) {
+          // 'comp' é agenda pessoal, filtrada por dono no servidor: se ele
+          // deixou de vir no snapshot é porque saiu da minha lista (foi
+          // encaminhado). NÃO reinjetar pela carência — senão o compromisso
+          // que passei para outro fica preso na minha tela por 3 minutos.
+          // (O que ainda está na fila é protegido pelo ramo de cima.)
+          if (col === 'comp') continue;
           novo[col].push(local);
         }
       }

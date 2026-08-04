@@ -268,14 +268,24 @@ function prepararComp(quem: Quem | null, cfg: any, registro: any, atual: any): {
 
   // Dono desejado: o que veio no corpo, senão o dono atual, senão eu mesmo.
   const dono = txt(registro.dono, 40) || (atual && atual.dono) || meuId;
-  // Quem não é da direção não pode ROUBAR compromisso de outro para si — só
-  // criar o próprio ou passar o seu adiante. (Criar já-de-outro é encaminhar.)
-  const novo: any = { ...registro, dono, donoNome: nomeDoDono(cfg, dono, registro.donoNome) };
 
-  // Marca "veio de fulano" quando o dono muda (encaminhamento).
+  // Estes campos são carimbados PELO SERVIDOR, nunca aceitos do corpo — senão
+  // qualquer um forjaria "veio da Direção" ou um donoNome falso. Tira do que
+  // veio antes de montar o registro.
+  const limpo: any = { ...registro };
+  delete limpo.donoNome; delete limpo.encaminhadoPor; delete limpo.encaminhadoEm;
+
+  const novo: any = { ...limpo, dono, donoNome: nomeDoDono(cfg, dono) };
+
+  // "veio de fulano" só quando o dono realmente mudou (encaminhamento). Senão,
+  // preserva o encaminhadoPor que já estava guardado (o merge de gravar faz por
+  // baixo), sem deixar o corpo escrever nada.
   if (atual && atual.dono && atual.dono !== dono) {
     novo.encaminhadoPor = atual.donoNome || nomeDoDono(cfg, atual.dono);
     novo.encaminhadoEm = agora();
+  } else if (atual && atual.encaminhadoPor) {
+    novo.encaminhadoPor = atual.encaminhadoPor;
+    novo.encaminhadoEm = atual.encaminhadoEm;
   }
   return { registro: novo };
 }
@@ -369,6 +379,11 @@ Deno.serve(async (req) => {
           registros = registros.filter((r: any) => r._col !== "comp" || r.dono === quem!.id);
         }
         const cfgSaida = cfgSemSegredo(cfg);
+        // Roster mínimo: só id + nome de quem está ativo, para o "encaminhar
+        // para" funcionar para TODO mundo — sem levar telefone, cargo ou hash.
+        // A lista completa (com telefone) continua só para a direção.
+        cfgSaida.pessoas = (cfg.usuarios || []).filter((u: any) => u.ativo !== false)
+          .map((u: any) => ({ id: u.id, nome: u.nome }));
         if (perfilDe(quem) !== "direcao") cfgSaida.usuarios = [];
         return json({
           ok: true, cfg: cfgSaida, registros, em: agora(),

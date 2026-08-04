@@ -297,6 +297,14 @@ function telaEntrar() {
     try {
       const r = await api('entrar');
       if (!r.ok) throw new Error('Senha incorreta');
+      // Entrou OUTRA pessoa que não a do cache? Zera os dados locais antes de
+      // puxar — senão a agenda pessoal (comp) e o resto do cache do usuário
+      // anterior ficariam no aparelho até o primeiro sync sobrescrever.
+      const idNovo = r.proprio ? r.usuarioId : '';
+      if (idNovo !== (localStorage.getItem(K.usuario) || '')) {
+        S.reg = regVazio();
+        try { localStorage.removeItem(K.cache); } catch { /* segue */ }
+      }
       // Acesso próprio: o nome e o perfil vêm do cadastro, não do que a pessoa
       // digitou. Senha da equipe: continua valendo o nome digitado.
       if (r.proprio) { S.quem = r.nome || nome; S.usuarioId = r.usuarioId; S.acessoProprio = true; }

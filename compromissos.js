@@ -31,8 +31,11 @@ const ehDirecaoComp = () => typeof ehDirecao === 'function' ? ehDirecao() : true
 const meuDono = () => (S.acessoProprio && S.usuarioId) ? S.usuarioId : 'equipe';
 
 function pessoasComp() {
-  const us = ((S.cfg && S.cfg.usuarios) || []).filter((u) => u.ativo !== false)
-    .map((u) => ({ id: u.id, nome: u.nome }));
+  // O roster mínimo (id + nome) que o servidor manda para TODO mundo no
+  // snapshot. Sem ele, quem não é da direção não via nome nenhum e não conseguia
+  // encaminhar. Cai para 'usuarios' só por compatibilidade com cache antigo.
+  const fonte = (S.cfg && (S.cfg.pessoas || S.cfg.usuarios)) || [];
+  const us = fonte.filter((u) => u.ativo !== false).map((u) => ({ id: u.id, nome: u.nome }));
   // A caixa da direção (senha da equipe) sempre existe como destino.
   if (!us.some((p) => p.id === 'equipe')) us.unshift({ id: 'equipe', nome: 'Direção' });
   return us;
@@ -71,7 +74,10 @@ TELAS.compromissos = function (el) {
   const filtro = dir ? (S.compDePessoa || null) : null;
 
   const todos = lista('comp')
-    .filter((c) => !filtro || c.dono === filtro)
+    // Quem não é da direção só vê os SEUS — defesa em profundidade além do
+    // filtro do servidor: a carência de sync do puxar pode deixar por segundos
+    // um compromisso recém-encaminhado no cache local.
+    .filter((c) => dir ? (!filtro || c.dono === filtro) : c.dono === meuDono())
     .map((c) => {
       const dias = c.data ? diasAte(c.data) : null;
       return Object.assign({}, c, { dias, pz: prazoComp(dias), t: tipoComp(c.tipo) });
@@ -110,7 +116,7 @@ TELAS.compromissos = function (el) {
       '<div class="acoes" style="flex-direction:column;align-items:flex-end">' +
         (c.feito ? '' : '<span class="etiqueta ' + c.pz.cls + '">' + esc(c.pz.txt) + '</span>') +
         '<div style="display:flex;gap:2px;margin-top:4px">' +
-          (pessoasComp().length > 1 ? '<button class="btn pequeno" data-passar="' + esc(c.id) + '" title="Encaminhar">↪</button>' : '') +
+          (pessoasComp().some((p) => p.id !== c.dono) ? '<button class="btn pequeno" data-passar="' + esc(c.id) + '" title="Encaminhar">↪</button>' : '') +
           '<button class="btn pequeno" data-editcomp="' + esc(c.id) + '" title="Editar">✎</button>' +
           '<button class="btn pequeno perigo" data-delcomp="' + esc(c.id) + '" title="Apagar">🗑</button>' +
         '</div>' +
@@ -223,12 +229,15 @@ function editarCompromisso(id) {
       { texto: id ? 'Salvar' : 'Cadastrar', classe: 'primario', aoClicar: (fundo) => {
         const d = lerCampos(fundo.querySelector('#fComp'));
         if (!d.titulo.trim()) { toast('Escreva o que precisa ser feito', 'ruim'); return; }
-        const base = c || {};
+        // RELÊ do store na hora de gravar. O modal fica aberto enquanto o sync
+        // roda; gravar por cima do retrato de quando ele abriu apagaria um
+        // "feito" marcado por outro aparelho ou o histórico. Só os campos do
+        // formulário mudam.
+        const base = (id && achar('comp', id)) || {};
         const reg = Object.assign({}, base, {
           id: id || undefined,
           titulo: d.titulo.trim(), tipo: d.tipo, referencia: (d.referencia || '').trim(),
-          data: d.data, hora: d.hora, obs: (d.obs || '').trim(),
-          feito: !!base.feito, feitoEm: base.feitoEm || ''
+          data: d.data, hora: d.hora, obs: (d.obs || '').trim()
         });
         // A direção pode atribuir; os outros vão sempre para a própria agenda
         // (o servidor carimba o dono de qualquer jeito, isto é só a intenção).
