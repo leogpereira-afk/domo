@@ -16,6 +16,9 @@ export const COLECOES: Record<string, { pre: string; nome: string }> = {
   prest: { pre: "",   nome: "Prestador de serviço" },
   doc:   { pre: "",   nome: "Documento" },
   proj:  { pre: "",   nome: "Projeto" },
+  // Agenda pessoal: cada pessoa vê os seus; a direção vê os de todos. O "dono"
+  // é carimbado pelo servidor (mandar dono no corpo não muda nada).
+  comp:  { pre: "",   nome: "Compromisso" },
 };
 
 export const NOMES_COLECOES = Object.keys(COLECOES);

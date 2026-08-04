@@ -286,6 +286,16 @@ tfoot td { font-weight: 700; border-top: 2px solid var(--borda); border-bottom: 
   font-size: .72rem; font-weight: 700; padding: 1px 7px; border-radius: 999px;
 }
 
+/* Compromissos: o quadradinho de "feito" à esquerda de cada linha */
+.check-comp {
+  flex: none; width: 30px; height: 30px; margin-top: 2px; border-radius: 8px;
+  border: 1.5px solid var(--borda); background: #fff; cursor: pointer;
+  color: #fff; font-weight: 800; font-size: .95rem; line-height: 1;
+}
+.check-comp:hover { border-color: var(--verde); }
+.check-comp.on { background: var(--verde); border-color: var(--verde); }
+.arquivo-solto.feito-comp { opacity: .62; }
+
 /* Caixinha de link na tela de Acessos: dá para selecionar e copiar à mão
    quando o navegador bloqueia a área de transferência (WebView do WhatsApp). */
 .linkzin {

@@ -26,10 +26,10 @@ export const PERFIS = {
   obra: {
     txt: 'Obra / almoxarifado',
     tudo: false,
-    escreve: ['sc', 'oc', 'crono'],
+    escreve: ['sc', 'oc', 'crono', 'comp'],
     // 'prest' fica de fora: a pasta do prestador tem CPF, ASO e ficha de
     // terceiros, e quem é da obra não abre essa tela.
-    le: ['sc', 'oc', 'os', 'crono', 'forn', 'doc', 'proj'],
+    le: ['sc', 'oc', 'os', 'crono', 'forn', 'doc', 'proj', 'comp'],
     semPreco: ['oc', 'os', 'cot']
   }
 };

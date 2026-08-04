@@ -15,7 +15,8 @@ export const COLECOES = {
   forn:  { pre: '',   nome: 'Fornecedor' },
   prest: { pre: '',   nome: 'Prestador de serviço' },
   doc:   { pre: '',   nome: 'Documento' },
-  proj:  { pre: '',   nome: 'Projeto' }
+  proj:  { pre: '',   nome: 'Projeto' },
+  comp:  { pre: '',   nome: 'Compromisso' }
 };
 
 export const NOMES_COLECOES = Object.keys(COLECOES);

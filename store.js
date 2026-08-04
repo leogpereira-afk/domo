@@ -8,7 +8,7 @@
 // TODAS as coleções do sistema. Ao criar uma nova, acrescente AQUI (e no
 // COLECOES do nucleo.mjs) — era em dois lugares e a cotação chegava do
 // servidor mas era jogada fora por não existir nesta lista.
-const COLECOES_APP = ['sc', 'cot', 'oc', 'os', 'crono', 'forn', 'prest', 'doc', 'proj'];
+const COLECOES_APP = ['sc', 'cot', 'oc', 'os', 'crono', 'forn', 'prest', 'doc', 'proj', 'comp'];
 const regVazio = () => COLECOES_APP.reduce((a, c) => { a[c] = []; return a; }, {});
 
 const S = {
@@ -40,7 +40,7 @@ const K = {
 
 // Espelho do que o servidor faz valer (lib/acesso.mjs). Serve só para não
 // mostrar botão que a pessoa não pode apertar — a porta é o servidor.
-const ESCRITA_POR_PERFIL = { obra: ['sc', 'oc', 'crono'] };
+const ESCRITA_POR_PERFIL = { obra: ['sc', 'oc', 'crono', 'comp'] };
 function podeEscrever(colecao) {
   const permitidas = ESCRITA_POR_PERFIL[S.perfil];
   return !permitidas || permitidas.includes(colecao);

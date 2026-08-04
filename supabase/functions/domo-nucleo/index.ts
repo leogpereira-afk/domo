@@ -244,6 +244,42 @@ function limparSolicitacao(r: any) {
   };
 }
 
+/* ── Compromisso: carimba o dono e barra mexer no que é de outro ─────────────
+   O dono é decidido AQUI, não pelo corpo do pedido:
+   - a direção pode criar/atribuir para qualquer pessoa cadastrada;
+   - quem não é da direção só edita o que é seu, mas PODE encaminhar (passar o
+     compromisso para outra pessoa) — aí ele sai da lista dela no próximo sync.
+   O nome do dono é resolvido do cadastro (cfg.usuarios), não do que veio. */
+function nomeDoDono(cfg: any, dono: string, fallback = ""): string {
+  if (dono === "equipe") return "Direção";
+  const u = (cfg.usuarios || []).find((x: any) => x.id === dono);
+  return (u && u.nome) || fallback || "";
+}
+
+function prepararComp(quem: Quem | null, cfg: any, registro: any, atual: any): { erro?: string; registro?: any } {
+  if (!quem) return { erro: "não autorizado" };
+  const ehDir = perfilDe(quem) === "direcao";
+  const meuId = quem.id;
+
+  // Quem NÃO é da direção só mexe no que já é seu (ou cria novo).
+  if (!ehDir && atual && atual.dono && atual.dono !== meuId) {
+    return { erro: "este compromisso não é seu" };
+  }
+
+  // Dono desejado: o que veio no corpo, senão o dono atual, senão eu mesmo.
+  const dono = txt(registro.dono, 40) || (atual && atual.dono) || meuId;
+  // Quem não é da direção não pode ROUBAR compromisso de outro para si — só
+  // criar o próprio ou passar o seu adiante. (Criar já-de-outro é encaminhar.)
+  const novo: any = { ...registro, dono, donoNome: nomeDoDono(cfg, dono, registro.donoNome) };
+
+  // Marca "veio de fulano" quando o dono muda (encaminhamento).
+  if (atual && atual.dono && atual.dono !== dono) {
+    novo.encaminhadoPor = atual.donoNome || nomeDoDono(cfg, atual.dono);
+    novo.encaminhadoEm = agora();
+  }
+  return { registro: novo };
+}
+
 /* ══════════════════════════════════════════════════════════════════════════ */
 Deno.serve(async (req) => {
   const pre = preflight(req);
@@ -325,7 +361,13 @@ Deno.serve(async (req) => {
         const todos = await lerTudo(body.colecoes || null, NOMES_COLECOES);
         // O celular da obra não leva preço nem contrato para casa: o cache fica
         // em texto no aparelho e sobrevive ao desligamento do acesso.
-        const registros = filtrarLeitura(quem, todos);
+        let registros = filtrarLeitura(quem, todos);
+        // Compromisso é agenda PESSOAL: quem não é da direção só recebe os seus.
+        // A separação é aqui no servidor — mandar dono no corpo não abre a lista
+        // de ninguém.
+        if (perfilDe(quem) !== "direcao") {
+          registros = registros.filter((r: any) => r._col !== "comp" || r.dono === quem!.id);
+        }
         const cfgSaida = cfgSemSegredo(cfg);
         if (perfilDe(quem) !== "direcao") cfgSaida.usuarios = [];
         return json({
@@ -346,6 +388,14 @@ Deno.serve(async (req) => {
         for (const it of itens) {
           if (!it || !it.colecao || !it.registro) continue;
           const atual = it.registro.id ? await lerUm(it.colecao, it.registro.id) : null;
+          // Compromisso tem regra própria: o dono é carimbado aqui, e quem não é
+          // da direção só mexe no que é seu (mas pode ENCAMINHAR para outro).
+          if (it.colecao === "comp") {
+            const pronto = prepararComp(quem, cfg, it.registro, atual);
+            if (pronto.erro) { recusados.push({ colecao: "comp", id: it.registro.id, motivo: pronto.erro }); continue; }
+            salvos.push(await gravar("comp", pronto.registro, por));
+            continue;
+          }
           const motivo = motivoRecusa(quem, it.colecao, it.registro, atual);
           if (motivo) { recusados.push({ colecao: it.colecao, id: it.registro.id, motivo }); continue; }
           salvos.push(await gravar(it.colecao, it.registro, por));

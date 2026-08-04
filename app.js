@@ -19,13 +19,13 @@ const PERFIS_APP = {
       'configurações da empresa e não esvazia a lixeira.',
     telas: ['painel', 'solicitacoes', 'cotacoes', 'compras', 'recebimento', 'servicos',
       'cronogramas', 'acompanhamento', 'fornecedores', 'prestadores', 'projetos', 'documentos',
-      'acessos', 'usuarios']
+      'compromissos', 'acessos', 'usuarios']
   },
   obra: {
     txt: 'Obra / almoxarifado',
     desc: 'Pede material, recebe a carga, lança o diário e consulta projeto e cronograma. ' +
       'Não aprova compra, não apaga nada e não vê configurações.',
-    telas: ['painel', 'solicitacoes', 'recebimento', 'cronogramas', 'projetos', 'documentos', 'usuarios']
+    telas: ['painel', 'solicitacoes', 'recebimento', 'cronogramas', 'projetos', 'documentos', 'compromissos', 'usuarios']
   }
 };
 
@@ -62,6 +62,8 @@ const MENU = [
           ((c.etapas || []).filter((e) => e && !e.apagadoEm && e.resposta && e.resposta.atende === false).length), 0)) },
   // Fornecedor de material e prestador de mão de obra são as duas metades da
   // mesma agenda — uma aba só, com as duas listas dentro.
+  { rota: 'compromissos', icone: '🗓️', texto: 'Compromissos',
+    bolha: () => (typeof meusCompromissosUrgentes === 'function' ? meusCompromissosUrgentes() : 0) },
   { rota: 'fornecedores', icone: '🏢', texto: 'Fornecedores e prestadores',
     bolha: () => prestadoresComPendencia() },
   { grupo: 'Acervo' },
@@ -387,6 +389,12 @@ TELAS.painel = function (el) {
   if (etapasRecusadas) tarefa('📅', etapasRecusadas + ' etapa(s) do cronograma que o fornecedor NÃO atende', 'cronogramas', true);
   const docsVencidos = vencendo.filter((d) => diasAte(d.validadeEm) < 0);
   if (docsVencidos.length) tarefa('🗂️', docsVencidos.length + ' documento(s) da empresa vencido(s)', 'documentos', true);
+  // Compromissos MEUS (ou de todos, se direção) atrasados ou de hoje.
+  if (podeVer('compromissos') && typeof compromissosAbertos === 'function') {
+    const meu = (typeof ehDirecaoComp === 'function' && ehDirecaoComp()) ? null : meuDono();
+    const urg = compromissosAbertos(meu).filter((c) => { const d = c.data ? diasAte(c.data) : null; return d != null && d <= 0; });
+    if (urg.length) tarefa('🗓️', urg.length + ' compromisso(s) atrasado(s) ou para hoje', 'compromissos', true);
+  }
 
   cabecalho('Painel', 'Visão geral da obra',
     '<button class="btn" data-acao="linkObra">🔗 Link da obra</button>' +
