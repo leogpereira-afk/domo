@@ -76,9 +76,16 @@ const hojeISO = () => new Date().toISOString().slice(0, 10);
 
 function diasAte(dataISO) {
   if (!dataISO) return null;
-  const d = new Date(String(dataISO).slice(0, 10) + 'T12:00:00');
-  if (isNaN(d)) return null;
-  return Math.round((d - new Date(new Date().toDateString())) / 86400000);
+  // As DUAS pontas na MEIA-NOITE LOCAL. Antes a data-alvo era ancorada ao
+  // meio-dia (T12:00) e o "hoje" à meia-noite: sobrava meio dia, que o
+  // Math.round empurrava para cima — "hoje" aparecia como "amanhã" e um atraso
+  // de 1 dia sumia (virava 0). Montes Claros não tem horário de verão, então
+  // meia-noite a meia-noite dá dias inteiros exatos.
+  const alvo = new Date(String(dataISO).slice(0, 10) + 'T00:00:00');
+  if (isNaN(alvo)) return null;
+  const hoje = new Date();
+  hoje.setHours(0, 0, 0, 0);
+  return Math.round((alvo - hoje) / 86400000);
 }
 
 /* ── Etiquetas de situação ─────────────────────────────────────────────────── */
