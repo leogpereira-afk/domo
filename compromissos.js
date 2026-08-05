@@ -41,6 +41,12 @@ function pessoasComp() {
   return us;
 }
 const nomeDono = (dono) => (pessoasComp().find((p) => p.id === dono) || {}).nome || dono || '—';
+// O telefone só existe no cadastro completo (cfg.usuarios), que só a direção
+// recebe. Para os outros, o WhatsApp abre pedindo o número.
+function telefoneDono(dono) {
+  const u = ((S.cfg && S.cfg.usuarios) || []).find((x) => x.id === dono);
+  return (u && u.telefone) || '';
+}
 
 // A frase antes do número. Também dá o grupo e o peso de ordenação.
 function prazoComp(dias) {
@@ -69,19 +75,63 @@ function meusCompromissosUrgentes() {
 /* ══════════════════════════════════════════════════════════════════════════
    TELA
    ══════════════════════════════════════════════════════════════════════════ */
-TELAS.compromissos = function (el) {
-  const dir = ehDirecaoComp();
-  const filtro = dir ? (S.compDePessoa || null) : null;
+// Uma linha da agenda. Clicar no corpo abre a CONVERSA; o quadradinho e os
+// botões pequenos agem sem abrir.
+function linhaComp(c, dir, mostraDono) {
+  const nAnexos = (c.anexos || []).filter((a) => a && !a.apagadoEm).length;
+  const nFala = (c.historico || []).filter((h) => h && (h.tipo === 'comentario' || h.tipo === 'anexo')).length;
+  return '<div class="arquivo-solto' + (c.feito ? ' feito-comp' : '') + '" style="align-items:flex-start">' +
+      '<button class="check-comp' + (c.feito ? ' on' : '') + '" data-feito="' + esc(c.id) + '" title="' +
+        (c.feito ? 'Reabrir' : 'Marcar como feito') + '">' + (c.feito ? '✓' : '') + '</button>' +
+      '<div class="comp-corpo" data-abrir="' + esc(c.id) + '" style="flex:1;min-width:0;cursor:pointer;display:flex;gap:10px">' +
+        '<span class="ic" title="' + esc(c.t.rotulo) + '">' + c.t.icone + '</span>' +
+        '<div style="flex:1;min-width:0">' +
+          '<div class="nome"' + (c.feito ? ' style="text-decoration:line-through;color:var(--texto-fraco)"' : '') + '>' +
+            esc(c.titulo) + '</div>' +
+          '<div class="meta">' + [
+            c.t.rotulo,
+            c.referencia ? esc(c.referencia) : '',
+            (mostraDono && c.dono !== meuDono()) ? '👤 ' + esc(nomeDono(c.dono)) : '',
+            (c.encaminhadoPor ? '↪ veio de ' + esc(c.encaminhadoPor) : ''),
+            nFala ? '💬 ' + nFala : '',
+            nAnexos ? '📎 ' + nAnexos : ''
+          ].filter(Boolean).join(' · ') + '</div>' +
+          (c.data ? '<div class="meta">' + fmt.data(c.data) + (c.hora ? ' às ' + esc(c.hora) : '') + '</div>' : '') +
+        '</div>' +
+      '</div>' +
+      '<div class="acoes" style="flex-direction:column;align-items:flex-end">' +
+        (c.feito ? '' : '<span class="etiqueta ' + c.pz.cls + '">' + esc(c.pz.txt) + '</span>') +
+        '<div style="display:flex;gap:2px;margin-top:4px">' +
+          (pessoasComp().some((p) => p.id !== c.dono) ? '<button class="btn pequeno" data-passar="' + esc(c.id) + '" title="Encaminhar">↪</button>' : '') +
+          '<button class="btn pequeno" data-editcomp="' + esc(c.id) + '" title="Editar">✎</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+}
 
+// Liga os cliques comuns às linhas (abrir conversa, feito, editar, encaminhar).
+function ligarLinhasComp(el) {
+  el.querySelectorAll('[data-abrir]').forEach((b) => b.addEventListener('click', () => irPara('compromissos/' + b.dataset.abrir)));
+  el.querySelectorAll('[data-feito]').forEach((b) => b.addEventListener('click', () => alternarFeitoComp(b.dataset.feito)));
+  el.querySelectorAll('[data-editcomp]').forEach((b) => b.addEventListener('click', () => editarCompromisso(b.dataset.editcomp)));
+  el.querySelectorAll('[data-passar]').forEach((b) => b.addEventListener('click', () => encaminharCompromisso(b.dataset.passar)));
+}
+
+TELAS.compromissos = function (el, args) {
+  if (args[0]) return telaCompromisso(el, args[0]);
+
+  const dir = ehDirecaoComp();
+  // Direção pode ver por urgência ou AGRUPADO POR PESSOA (o padrão dela).
+  const modo = dir ? (S.compModo || 'pessoa') : 'urgencia';
+
+  const enriquece = (c) => {
+    const dias = c.data ? diasAte(c.data) : null;
+    return Object.assign({}, c, { dias, pz: prazoComp(dias), t: tipoComp(c.tipo) });
+  };
   const todos = lista('comp')
-    // Quem não é da direção só vê os SEUS — defesa em profundidade além do
-    // filtro do servidor: a carência de sync do puxar pode deixar por segundos
-    // um compromisso recém-encaminhado no cache local.
-    .filter((c) => dir ? (!filtro || c.dono === filtro) : c.dono === meuDono())
-    .map((c) => {
-      const dias = c.data ? diasAte(c.data) : null;
-      return Object.assign({}, c, { dias, pz: prazoComp(dias), t: tipoComp(c.tipo) });
-    });
+    // Quem não é direção só vê os SEUS (defesa em profundidade além do servidor).
+    .filter((c) => dir || c.dono === meuDono())
+    .map(enriquece);
   const abertos = todos.filter((c) => !c.feito).sort((a, b) => a.pz.peso - b.pz.peso);
   const feitos = todos.filter((c) => c.feito)
     .sort((a, b) => String(b.feitoEm || '').localeCompare(String(a.feitoEm || '')));
@@ -95,45 +145,28 @@ TELAS.compromissos = function (el) {
         : 'Suas visitas, medições, retornos e o que você tem para resolver. Só você vê esta lista.',
     '<button class="btn primario" id="novoComp">+ Novo compromisso</button>');
 
-  // Cartão de uma linha da agenda.
-  const linha = (c) =>
-    '<div class="arquivo-solto' + (c.feito ? ' feito-comp' : '') + '" style="align-items:flex-start">' +
-      '<button class="check-comp' + (c.feito ? ' on' : '') + '" data-feito="' + esc(c.id) + '" title="' +
-        (c.feito ? 'Reabrir' : 'Marcar como feito') + '">' + (c.feito ? '✓' : '') + '</button>' +
-      '<span class="ic" title="' + esc(c.t.rotulo) + '">' + c.t.icone + '</span>' +
-      '<div style="flex:1;min-width:0">' +
-        '<div class="nome"' + (c.feito ? ' style="text-decoration:line-through;color:var(--texto-fraco)"' : '') + '>' +
-          esc(c.titulo) + '</div>' +
-        '<div class="meta">' + [
-          c.t.rotulo,
-          c.referencia ? esc(c.referencia) : '',
-          (dir && !filtro && c.dono !== meuDono()) ? '👤 ' + esc(nomeDono(c.dono)) : '',
-          (c.encaminhadoPor ? 'veio de ' + esc(c.encaminhadoPor) : ''),
-          c.obs ? esc(c.obs) : ''
-        ].filter(Boolean).join(' · ') + '</div>' +
-        (c.data ? '<div class="meta">' + fmt.data(c.data) + (c.hora ? ' às ' + esc(c.hora) : '') + '</div>' : '') +
-      '</div>' +
-      '<div class="acoes" style="flex-direction:column;align-items:flex-end">' +
-        (c.feito ? '' : '<span class="etiqueta ' + c.pz.cls + '">' + esc(c.pz.txt) + '</span>') +
-        '<div style="display:flex;gap:2px;margin-top:4px">' +
-          (pessoasComp().some((p) => p.id !== c.dono) ? '<button class="btn pequeno" data-passar="' + esc(c.id) + '" title="Encaminhar">↪</button>' : '') +
-          '<button class="btn pequeno" data-editcomp="' + esc(c.id) + '" title="Editar">✎</button>' +
-          '<button class="btn pequeno perigo" data-delcomp="' + esc(c.id) + '" title="Apagar">🗑</button>' +
-        '</div>' +
-      '</div>' +
-    '</div>';
-
-  // Agrupa os abertos por prazo.
-  const grupos = [];
-  for (const c of abertos) {
-    let g = grupos.find((x) => x.nome === c.pz.grupo);
-    if (!g) { g = { nome: c.pz.grupo, itens: [] }; grupos.push(g); }
-    g.itens.push(c);
+  // Monta os grupos conforme o modo.
+  let grupos;
+  if (modo === 'pessoa') {
+    // Um bloco por pessoa, com os abertos dela por urgência dentro.
+    const porDono = new Map();
+    for (const c of abertos) {
+      if (!porDono.has(c.dono)) porDono.set(c.dono, []);
+      porDono.get(c.dono).push(c);
+    }
+    grupos = [...porDono.entries()]
+      .map(([dono, itens]) => ({ nome: '👤 ' + nomeDono(dono), itens }))
+      .sort((a, b) => a.nome.localeCompare(b.nome));
+  } else {
+    grupos = [];
+    for (const c of abertos) {
+      let g = grupos.find((x) => x.nome === c.pz.grupo);
+      if (!g) { g = { nome: c.pz.grupo, itens: [] }; grupos.push(g); }
+      g.itens.push(c);
+    }
+    grupos.sort((a, b) => ORDEM_GRUPOS.indexOf(a.nome) - ORDEM_GRUPOS.indexOf(b.nome));
   }
-  grupos.sort((a, b) => ORDEM_GRUPOS.indexOf(a.nome) - ORDEM_GRUPOS.indexOf(b.nome));
-
-  // Chips por pessoa (só direção, e só se houver mais de uma pessoa com agenda).
-  const donos = dir ? [...new Set(lista('comp').map((c) => c.dono).filter(Boolean))] : [];
+  const mostraDono = dir && modo !== 'pessoa';
 
   el.innerHTML =
     '<div class="grade g4 compacto" style="margin-bottom:16px">' +
@@ -143,56 +176,216 @@ TELAS.compromissos = function (el) {
       indicador('Resolvidos', String(feitos.length), 'já concluídos', feitos.length ? 'ok' : '') +
     '</div>' +
 
-    (dir && donos.length > 1
-      ? '<div class="filtros" style="margin-bottom:14px">' +
-        '<button class="btn pequeno' + (!filtro ? ' primario' : '') + '" data-pessoa="">Equipe toda</button>' +
-        donos.map((d) => {
-          const n = compromissosAbertos(d).length;
-          return '<button class="btn pequeno' + (filtro === d ? ' primario' : '') + '" data-pessoa="' + esc(d) + '">' +
-            esc(nomeDono(d)) + (n ? ' (' + n + ')' : '') + '</button>';
-        }).join('') + '</div>'
+    (dir
+      ? '<div class="abas">' +
+          '<button class="aba' + (modo === 'pessoa' ? ' ativa' : '') + '" data-modo="pessoa">👤 Por pessoa</button>' +
+          '<button class="aba' + (modo === 'urgencia' ? ' ativa' : '') + '" data-modo="urgencia">🕒 Por urgência</button>' +
+        '</div>'
       : '') +
 
     (grupos.length
       ? grupos.map((g) =>
           '<div class="cartao"><h3>' + esc(g.nome) + ' <span class="etiqueta">' + g.itens.length + '</span></h3>' +
-          g.itens.map(linha).join('') + '</div>').join('')
-      : '<div class="cartao">' + vazio('🗓️', 'Nada em aberto' + (filtro ? ' para esta pessoa' : ''),
+          g.itens.map((c) => linhaComp(c, dir, mostraDono)).join('') + '</div>').join('')
+      : '<div class="cartao">' + vazio('🗓️', 'Nada em aberto',
           'Use "Novo compromisso" para anotar uma visita, uma medição ou algo a resolver.') + '</div>') +
 
     (feitos.length
       ? '<div class="cartao"><h3>✅ Concluídos <span class="etiqueta">' + feitos.length + '</span></h3>' +
-        '<div id="feitosComp" style="display:none">' + feitos.map(linha).join('') + '</div>' +
+        '<div id="feitosComp" style="display:none">' + feitos.map((c) => linhaComp(c, dir, dir)).join('') + '</div>' +
         '<button class="btn pequeno" id="verFeitos" style="margin-top:4px">Mostrar concluídos</button></div>'
       : '');
 
   document.getElementById('novoComp').addEventListener('click', () => editarCompromisso(null));
-  el.querySelectorAll('[data-pessoa]').forEach((b) => b.addEventListener('click', () => {
-    S.compDePessoa = b.dataset.pessoa || null;
-    render();
-  }));
-  el.querySelectorAll('[data-feito]').forEach((b) => b.addEventListener('click', () => alternarFeitoComp(b.dataset.feito)));
-  el.querySelectorAll('[data-editcomp]').forEach((b) => b.addEventListener('click', () => editarCompromisso(b.dataset.editcomp)));
-  el.querySelectorAll('[data-delcomp]').forEach((b) => b.addEventListener('click', () => apagarCompromisso(b.dataset.delcomp)));
-  el.querySelectorAll('[data-passar]').forEach((b) => b.addEventListener('click', () => encaminharCompromisso(b.dataset.passar)));
+  el.querySelectorAll('[data-modo]').forEach((b) => b.addEventListener('click', () => { S.compModo = b.dataset.modo; render(); }));
+  ligarLinhasComp(el);
   const vf = document.getElementById('verFeitos');
   if (vf) vf.addEventListener('click', () => {
     const cx = document.getElementById('feitosComp');
     const aberto = cx.style.display !== 'none';
     cx.style.display = aberto ? 'none' : '';
     vf.textContent = aberto ? 'Mostrar concluídos' : 'Ocultar concluídos';
+    if (!aberto) ligarLinhasComp(cx);
   });
 };
 
 /* ── Marcar feito / reabrir (otimista) ─────────────────────────────────────── */
+// Cada mudança de estado vira uma linha na conversa — a história fica DENTRO do
+// compromisso. O 'por' de fato quem é a autoria é carimbado no servidor.
+function eventoComp(tipo, texto) {
+  return { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    em: new Date().toISOString(), por: S.quem || '—', tipo, texto };
+}
+
 function alternarFeitoComp(id) {
   const c = achar('comp', id);
   if (!c) return;
   const feito = !c.feito;
   salvar('comp', Object.assign({}, c, {
-    feito, feitoEm: feito ? new Date().toISOString() : ''
+    feito, feitoEm: feito ? new Date().toISOString() : '',
+    historico: [...(c.historico || []), eventoComp(feito ? 'feito' : 'reaberto', feito ? 'Marcou como feito' : 'Reabriu')]
   }));
   render();
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   A CONVERSA — o detalhe de um compromisso, com a história, os anexos e o
+   espaço para comentar. Tudo mora dentro do próprio compromisso.
+   ══════════════════════════════════════════════════════════════════════════ */
+const ICONE_EVENTO = { criado: '✳️', encaminhado: '↪', feito: '✅', reaberto: '↩️', comentario: '💬', anexo: '📎' };
+
+function telaCompromisso(el, id) {
+  const c = achar('comp', id);
+  if (!c) { cabecalho('Compromisso', ''); el.innerHTML = vazio('🤔', 'Compromisso não encontrado'); return; }
+  const dir = ehDirecaoComp();
+  const t = tipoComp(c.tipo);
+  const dias = c.data ? diasAte(c.data) : null;
+  const pz = prazoComp(dias);
+  const tel = telefoneDono(c.dono);
+
+  cabecalho(t.icone + ' ' + (c.titulo || 'Compromisso'),
+    (c.feito ? 'Concluído' : pz.txt) + ' · ' + t.rotulo +
+      (dir ? ' · 👤 ' + esc(nomeDono(c.dono)) : ''),
+    '<a class="btn" href="#/compromissos">← Voltar</a>' +
+    '<button class="btn" id="cWhats"' + (tel ? '' : ' title="A pessoa não tem WhatsApp no cadastro"') + '>📲 WhatsApp (PDF)</button>' +
+    '<button class="btn" id="cEditar">Editar</button>' +
+    (pessoasComp().some((p) => p.id !== c.dono) ? '<button class="btn" id="cPassar">↪ Encaminhar</button>' : ''));
+
+  const anexos = (c.anexos || []).filter((a) => a && !a.apagadoEm);
+  // A história, do mais antigo para o mais novo (a conversa lê de cima para baixo).
+  const fio = (c.historico || []).slice()
+    .sort((a, b) => String(a.em || '').localeCompare(String(b.em || '')));
+
+  el.innerHTML =
+    '<div class="grade g2"><div>' +
+      // ── cabeçalho do compromisso ──
+      '<div class="cartao">' +
+        '<div class="barra-acoes" style="justify-content:space-between;align-items:flex-start">' +
+          '<div><h3 style="margin:0">' + esc(c.titulo) + '</h3>' +
+            '<div class="legenda">' + esc(t.rotulo) + (c.referencia ? ' · ' + esc(c.referencia) : '') + '</div></div>' +
+          '<button class="check-comp' + (c.feito ? ' on' : '') + '" id="cFeito" title="' +
+            (c.feito ? 'Reabrir' : 'Marcar como feito') + '">' + (c.feito ? '✓' : '') + '</button>' +
+        '</div>' +
+        '<p style="margin-top:10px">' +
+          (c.data ? '<b>Quando:</b> ' + fmt.data(c.data) + (c.hora ? ' às ' + esc(c.hora) : '') +
+            ' <span class="etiqueta ' + pz.cls + '">' + esc(c.feito ? 'concluído' : pz.txt) + '</span><br>' : '<b>Sem data marcada.</b><br>') +
+          '<b>De quem é:</b> ' + esc(nomeDono(c.dono)) +
+            (c.encaminhadoPor ? ' · <span style="color:var(--texto-fraco)">veio de ' + esc(c.encaminhadoPor) + '</span>' : '') + '<br>' +
+          (c.obs ? '<b>Observação:</b> ' + esc(c.obs) : '') +
+        '</p>' +
+      '</div>' +
+
+      // ── a conversa ──
+      '<div class="cartao"><h3>💬 Conversa</h3>' +
+        (fio.length
+          ? '<div class="fio-comp">' + fio.map((h) =>
+              '<div class="fio-item' + (h.tipo === 'comentario' ? ' fio-fala' : '') + '">' +
+                '<span class="fio-ic">' + (ICONE_EVENTO[h.tipo] || '•') + '</span>' +
+                '<div style="flex:1;min-width:0">' +
+                  '<div class="fio-txt">' + esc(h.texto || '') + '</div>' +
+                  '<div class="meta">' + esc(h.por || '—') + ' · ' + fmt.quando(h.em) + '</div>' +
+                '</div></div>').join('') + '</div>'
+          : '<p class="legenda">Ainda sem conversa. Comente abaixo, anexe um arquivo ou encaminhe.</p>') +
+        '<div style="margin-top:12px;display:flex;gap:8px;align-items:flex-start">' +
+          '<textarea id="cComentario" rows="2" placeholder="Escreva um comentário…" style="flex:1"></textarea>' +
+          '<button class="btn primario" id="cEnviarComent">Comentar</button>' +
+        '</div>' +
+      '</div>' +
+    '</div><div>' +
+
+      // ── anexos ──
+      '<div class="cartao"><h3>📎 Anexos</h3>' +
+        (anexos.length
+          ? anexos.map((a) =>
+              '<div class="arquivo-solto"><span class="ic">' + iconeAnexo(a) + '</span>' +
+              '<div style="flex:1;min-width:0"><div class="nome">' + esc(a.nome || 'arquivo') + '</div>' +
+              '<div class="meta">' + (a.tamanho ? fmt.tamanho(a.tamanho) + ' · ' : '') + esc(a.por || '') +
+                ' · ' + fmt.quando(a.em) + '</div></div>' +
+              '<div class="acoes"><button class="btn pequeno" data-baixaanexo="' + esc(a.arquivoId) +
+                '" data-nome="' + esc(a.nome || 'arquivo') + '">Baixar</button></div></div>').join('')
+          : '<p class="legenda">Nenhum arquivo anexado.</p>') +
+        '<div class="progresso" id="cAnexoProg" style="display:none;margin-top:8px"><i></i></div>' +
+        '<button class="btn" id="cAnexar" style="margin-top:8px">📎 Anexar arquivo</button>' +
+      '</div>' +
+
+      '<div class="cartao"><button class="btn perigo" id="cApagar" style="width:100%">Apagar compromisso</button></div>' +
+    '</div></div>';
+
+  document.getElementById('cFeito').addEventListener('click', () => alternarFeitoComp(id));
+  document.getElementById('cEditar').addEventListener('click', () => editarCompromisso(id));
+  document.getElementById('cApagar').addEventListener('click', () => apagarCompromisso(id, true));
+  const bp = document.getElementById('cPassar');
+  if (bp) bp.addEventListener('click', () => encaminharCompromisso(id));
+  document.getElementById('cWhats').addEventListener('click', () => enviarCompromissoWhats(id));
+  document.getElementById('cEnviarComent').addEventListener('click', () => {
+    const ta = document.getElementById('cComentario');
+    const txt = (ta.value || '').trim();
+    if (!txt) { toast('Escreva o comentário', 'ruim'); return; }
+    comentarCompromisso(id, txt);
+  });
+  document.getElementById('cAnexar').addEventListener('click', () => anexarAoCompromisso(id));
+  el.querySelectorAll('[data-baixaanexo]').forEach((b) => b.addEventListener('click', () => baixarAnexoComp(b.dataset.baixaanexo, b.dataset.nome)));
+}
+
+const iconeAnexo = (a) => {
+  const m = String(a.mime || a.nome || '').toLowerCase();
+  if (m.includes('pdf')) return '📕';
+  if (m.match(/image|jpg|jpeg|png|heic/)) return '🖼️';
+  if (m.match(/sheet|excel|xls|csv/)) return '📊';
+  return '📄';
+};
+
+/* ── Comentar ──────────────────────────────────────────────────────────────── */
+function comentarCompromisso(id, texto) {
+  const c = achar('comp', id);
+  if (!c) return;
+  salvar('comp', Object.assign({}, c, {
+    historico: [...(c.historico || []), eventoComp('comentario', texto)]
+  }));
+  render();
+}
+
+/* ── Anexar arquivo à conversa ─────────────────────────────────────────────── */
+function anexarAoCompromisso(id) {
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.addEventListener('change', async () => {
+    const file = inp.files[0];
+    if (!file) return;
+    const prog = document.getElementById('cAnexoProg');
+    const btn = document.getElementById('cAnexar');
+    if (btn) btn.disabled = true;
+    if (prog) prog.style.display = '';
+    try {
+      const meta = await enviarArquivo(file, (p) => { if (prog) prog.querySelector('i').style.width = (p * 100) + '%'; });
+      const base = achar('comp', id);   // relê: o modal/anexo pode ter demorado
+      const anexo = { id: meta.id, arquivoId: meta.id, nome: file.name,
+        tamanho: file.size, mime: file.type || meta.mime || '', em: new Date().toISOString(), por: S.quem || '—' };
+      salvar('comp', Object.assign({}, base, {
+        anexos: [...((base && base.anexos) || []), anexo],
+        historico: [...((base && base.historico) || []), eventoComp('anexo', 'Anexou ' + file.name)]
+      }));
+      toast('Arquivo anexado', 'bom');
+    } catch (e) {
+      toast('Não consegui anexar (precisa de internet): ' + e.message, 'ruim');
+    } finally {
+      if (prog) prog.style.display = 'none';
+      if (btn) btn.disabled = false;
+      render();
+    }
+  });
+  inp.click();
+}
+
+function baixarAnexoComp(arquivoId, nome) {
+  toast('Baixando…');
+  baixarArquivo(arquivoId).then(({ blob }) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = nome || 'arquivo';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  }).catch((e) => toast('Não consegui baixar: ' + e.message, 'ruim'));
 }
 
 /* ── Criar / editar ────────────────────────────────────────────────────────── */
@@ -243,9 +436,16 @@ function editarCompromisso(id) {
         // (o servidor carimba o dono de qualquer jeito, isto é só a intenção).
         if (dir && d.dono) reg.dono = d.dono;
         else if (!id) reg.dono = meuDono();
-        salvar('comp', reg);
-        fecharEste(fundo); render();
+        // Ao CRIAR, a conversa começa com o evento de abertura.
+        if (!id) {
+          const paraQuem = (dir && d.dono && d.dono !== meuDono()) ? ' e atribuiu a ' + nomeDono(d.dono) : '';
+          reg.historico = [eventoComp('criado', 'Criou o compromisso' + paraQuem)];
+        }
+        const salvo = salvar('comp', reg);
+        fecharEste(fundo);
         toast('Compromisso salvo', 'bom');
+        // Recém-criado abre direto na conversa; edição volta para onde estava.
+        if (!id) irPara('compromissos/' + salvo.id); else render();
       } }
     ].filter(Boolean)
   });
@@ -267,11 +467,15 @@ function encaminharCompromisso(id) {
       { texto: 'Encaminhar', classe: 'primario', aoClicar: async (fundo) => {
         const para = fundo.querySelector('[data-campo=para]').value;
         const nome = nomeDono(para);
-        salvar('comp', Object.assign({}, c, { dono: para }));
+        // O servidor registra o evento "encaminhou de X para Y" no fio da
+        // conversa — aqui só muda o dono. O evento vem no próximo sync.
+        salvar('comp', Object.assign({}, achar('comp', id) || c, { dono: para }));
         fecharEste(fundo);
-        // O servidor filtra por dono: para ele sair da minha lista, puxo de novo.
-        try { await puxar(); } catch { /* segue com o cache */ }
-        render();
+        // Se eu não for da direção, o compromisso saiu da minha lista: volto
+        // para a agenda. A direção continua vendo, então fica na conversa.
+        if (!ehDirecaoComp()) irPara('compromissos'); else render();
+        // O servidor filtra por dono: puxo de novo para refletir a mudança.
+        try { await puxar(); render(); } catch { /* segue com o cache */ }
         toast('Encaminhado para ' + nome, 'bom');
       } }
     ]
@@ -282,10 +486,111 @@ function encaminharCompromisso(id) {
    Exclusão SUAVE via salvar (apagadoEm), não a rota 'apagar': assim funciona
    offline, passa pela checagem de dono do servidor (a rota 'apagar' é barrada
    para o perfil obra) e some da lista na hora. A rotina diária varre depois. */
-async function apagarCompromisso(id) {
+async function apagarCompromisso(id, voltar) {
   const c = achar('comp', id);
   if (!c) return;
   if (!await confirmar('Apagar "' + (c.titulo || 'este compromisso') + '"?', { perigo: true, ok: 'Apagar' })) return;
   salvar('comp', Object.assign({}, c, { apagadoEm: new Date().toISOString(), apagadoPor: S.quem || '—' }));
-  render();
+  if (voltar) irPara('compromissos'); else render();
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   PDF + WHATSAPP — mandar o compromisso pronto para a pessoa.
+   O wa.me só leva TEXTO, não anexa arquivo. Então: no celular, usamos o
+   compartilhamento nativo (navigator.share com o PDF), que abre o WhatsApp já
+   com o arquivo. Onde isso não existe (desktop), baixamos o PDF e abrimos a
+   conversa com um resumo em texto, para a pessoa anexar o PDF na mão.
+   ══════════════════════════════════════════════════════════════════════════ */
+async function pdfCompromisso(c) {
+  const logo = await carregarLogo();
+  const doc = novoDoc();
+  const t = tipoComp(c.tipo);
+  let y = cabecalhoPDF(doc, logo, S.cfg, 'COMPROMISSO', t.rotulo);
+
+  doc.setTextColor(20, 20, 20);
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(13);
+  y += 2;
+  doc.splitTextToSize(c.titulo || '—', 190).forEach((ln) => { doc.text(ln, 10, y); y += 6; });
+
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5); doc.setTextColor(60, 60, 60);
+  const linhas = [
+    c.data ? 'Quando: ' + fmt.data(c.data) + (c.hora ? ' às ' + c.hora : '') : 'Sem data marcada',
+    'Responsável: ' + nomeDono(c.dono),
+    c.referencia ? 'Obra / quem: ' + c.referencia : '',
+    c.feito ? 'Situação: CONCLUÍDO' : 'Situação: em aberto',
+    c.obs ? 'Observação: ' + c.obs : ''
+  ].filter(Boolean);
+  y += 1;
+  linhas.forEach((l) => { doc.splitTextToSize(l, 190).forEach((ln) => { doc.text(ln, 10, y); y += 5; }); });
+
+  // A conversa
+  const fio = (c.historico || []).slice().sort((a, b) => String(a.em || '').localeCompare(String(b.em || '')));
+  if (fio.length) {
+    y += 4; doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(0, 61, 168);
+    doc.text('Histórico', 10, y); y += 5;
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8.6); doc.setTextColor(50, 50, 50);
+    for (const h of fio) {
+      if (y > 275) { doc.addPage(); y = 15; }
+      const cab = (ICONE_EVENTO[h.tipo] ? '' : '') + fmt.dataHora(h.em) + ' · ' + (h.por || '—') + ':';
+      doc.setFont('helvetica', 'bold'); doc.text(cab, 10, y); y += 4;
+      doc.setFont('helvetica', 'normal');
+      doc.splitTextToSize(h.texto || '', 188).forEach((ln) => { doc.text(ln, 12, y); y += 4.2; });
+      y += 1.5;
+    }
+  }
+  const anexos = (c.anexos || []).filter((a) => a && !a.apagadoEm);
+  if (anexos.length) {
+    if (y > 265) { doc.addPage(); y = 15; }
+    y += 3; doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(0, 61, 168);
+    doc.text('Anexos', 10, y); y += 5;
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8.6); doc.setTextColor(50, 50, 50);
+    anexos.forEach((a) => { doc.text('• ' + (a.nome || 'arquivo') + (a.tamanho ? ' (' + fmt.tamanho(a.tamanho) + ')' : ''), 12, y); y += 4.4; });
+  }
+  return doc;
+}
+
+async function enviarCompromissoWhats(id) {
+  const c = achar('comp', id);
+  if (!c) return;
+  toast('Gerando o PDF…');
+  let doc;
+  try { doc = await pdfCompromisso(c); }
+  catch (e) { toast('Não consegui gerar o PDF: ' + e.message, 'ruim'); return; }
+
+  const nomeArq = 'compromisso-' + (c.titulo || 'domo').replace(/\W+/g, '_').slice(0, 30) + '.pdf';
+  const blob = doc.output('blob');
+  const file = new File([blob], nomeArq, { type: 'application/pdf' });
+
+  const resumo = [
+    '*' + ((S.cfg && S.cfg.empresa && S.cfg.empresa.nomeCurto) || 'Domo Construtora') + '* — compromisso',
+    '',
+    c.titulo,
+    c.data ? '📅 ' + fmt.data(c.data) + (c.hora ? ' às ' + c.hora : '') : '',
+    c.referencia ? '📍 ' + c.referencia : '',
+    c.obs ? '📝 ' + c.obs : '',
+    '',
+    'Segue o PDF em anexo.'
+  ].filter(Boolean).join('\n');
+
+  // 1) Celular: compartilhamento nativo com o arquivo — abre o WhatsApp com o
+  //    PDF já anexado.
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: c.titulo || 'Compromisso', text: resumo });
+      return;
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;   // a pessoa fechou o menu
+      /* sem suporte real: cai no plano B */
+    }
+  }
+
+  // 2) Desktop / sem compartilhamento: baixa o PDF e abre a conversa com o
+  //    resumo — a pessoa anexa o PDF que acabou de baixar.
+  doc.save(nomeArq);
+  const tel = telefoneDono(c.dono);
+  const numero = tel || await perguntar('Para qual WhatsApp?',
+    { titulo: 'Enviar no WhatsApp', valor: '', ok: 'Abrir conversa', dica: 'Só números, com DDD' });
+  if (numero === null) return;
+  window.open(linkWhats(numero, resumo + '\n\n(o PDF foi baixado no seu aparelho — anexe aqui)'), '_blank');
+  toast('PDF baixado. Anexe-o na conversa que abriu.', 'bom');
 }

@@ -260,6 +260,9 @@ function prepararComp(quem: Quem | null, cfg: any, registro: any, atual: any): {
   if (!quem) return { erro: "não autorizado" };
   const ehDir = perfilDe(quem) === "direcao";
   const meuId = quem.id;
+  // Nome real de quem está agindo. É o que carimba a autoria no fio da conversa
+  // — o corpo do pedido não escolhe "por quem".
+  const euNome = (quem.proprio && quem.nome) || "Direção";
 
   // Quem NÃO é da direção só mexe no que já é seu (ou cria novo).
   if (!ehDir && atual && atual.dono && atual.dono !== meuId) {
@@ -277,12 +280,36 @@ function prepararComp(quem: Quem | null, cfg: any, registro: any, atual: any): {
 
   const novo: any = { ...limpo, dono, donoNome: nomeDoDono(cfg, dono) };
 
-  // "veio de fulano" só quando o dono realmente mudou (encaminhamento). Senão,
-  // preserva o encaminhadoPor que já estava guardado (o merge de gravar faz por
-  // baixo), sem deixar o corpo escrever nada.
+  // ── O FIO DA CONVERSA ──────────────────────────────────────────────────────
+  // Cada compromisso guarda a própria história (historico) e os anexos DENTRO
+  // dele — não num log externo. As duas listas se juntam item a item pelo id
+  // (estão no CAMPOS_UNIAO), então dois aparelhos escrevendo no mesmo fio não se
+  // atropelam.
+  const idsAntigos = new Set(((atual && atual.historico) || []).map((h: any) => h.id));
+  novo.historico = (Array.isArray(novo.historico) ? novo.historico : []).map((h: any) => {
+    if (!h || idsAntigos.has(h.id)) return h;            // entrada antiga: não mexe
+    // Entrada NOVA (comentário/anexo/feito): a autoria é carimbada, não confia
+    // no que veio. Isso impede alguém assinar comentário no lugar de outro.
+    return { ...h, por: euNome };
+  });
+  // Anexo novo também leva a autoria real.
+  const idsAnexo = new Set(((atual && atual.anexos) || []).map((a: any) => a.id));
+  if (Array.isArray(novo.anexos)) {
+    novo.anexos = novo.anexos.map((a: any) =>
+      (a && !idsAnexo.has(a.id)) ? { ...a, por: euNome } : a);
+  }
+
+  // Encaminhou / voltou: o servidor é quem registra o evento no fio, com o
+  // de-para verdadeiro — é a trilha "foi para a Ana e voltou" que o dono pediu.
   if (atual && atual.dono && atual.dono !== dono) {
-    novo.encaminhadoPor = atual.donoNome || nomeDoDono(cfg, atual.dono);
+    const deNome = atual.donoNome || nomeDoDono(cfg, atual.dono);
+    const paraNome = nomeDoDono(cfg, dono);
+    novo.encaminhadoPor = deNome;
     novo.encaminhadoEm = agora();
+    novo.historico = [...(novo.historico || []), {
+      id: idNovo(), em: agora(), por: euNome, tipo: "encaminhado",
+      texto: "Encaminhou de " + deNome + " para " + paraNome,
+    }];
   } else if (atual && atual.encaminhadoPor) {
     novo.encaminhadoPor = atual.encaminhadoPor;
     novo.encaminhadoEm = atual.encaminhadoEm;
@@ -421,7 +448,12 @@ Deno.serve(async (req) => {
             detalhe: recusados.map((r) => r.colecao + ":" + r.motivo).join(" | "),
           });
         }
-        await registrarLog({ acao: "salvou", por, qtd: salvos.length, cols: itens.map((i: any) => i.colecao).join(",") });
+        // Compromisso NÃO vai para o log de auditoria: a história dele vive
+        // dentro da própria conversa (historico), não num registro externo.
+        const colsLog = itens.map((i: any) => i.colecao).filter((c: string) => c !== "comp");
+        if (colsLog.length) {
+          await registrarLog({ acao: "salvou", por, qtd: colsLog.length, cols: colsLog.join(",") });
+        }
         return json({ ok: true, salvos, recusados });
       }
 
