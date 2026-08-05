@@ -270,7 +270,9 @@ function prepararComp(quem: Quem | null, cfg: any, registro: any, atual: any): {
   }
 
   // Dono desejado: o que veio no corpo, senão o dono atual, senão eu mesmo.
-  const dono = txt(registro.dono, 40) || (atual && atual.dono) || meuId;
+  // Quem NÃO é da direção não CRIA compromisso já na agenda de outro — só na
+  // própria. (Encaminhar depois é permitido; nascer no colo de alguém, não.)
+  const dono = (!ehDir && !atual) ? meuId : (txt(registro.dono, 40) || (atual && atual.dono) || meuId);
 
   // Estes campos são carimbados PELO SERVIDOR, nunca aceitos do corpo — senão
   // qualquer um forjaria "veio da Direção" ou um donoNome falso. Tira do que
@@ -285,12 +287,15 @@ function prepararComp(quem: Quem | null, cfg: any, registro: any, atual: any): {
   // dele — não num log externo. As duas listas se juntam item a item pelo id
   // (estão no CAMPOS_UNIAO), então dois aparelhos escrevendo no mesmo fio não se
   // atropelam.
-  const idsAntigos = new Set(((atual && atual.historico) || []).map((h: any) => h.id));
+  // A conversa é APPEND-ONLY: entrada antiga é imutável. Para cada id que já
+  // existe, devolvemos a versão GUARDADA (não a que veio do corpo) — senão dava
+  // para reescrever ou reassinar o comentário de outro só reenviando o mesmo id.
+  // Entrada nova tem a autoria carimbada com quem está de fato agindo.
+  const mapaAntigo = new Map(((atual && atual.historico) || []).map((h: any) => [h.id, h]));
   novo.historico = (Array.isArray(novo.historico) ? novo.historico : []).map((h: any) => {
-    if (!h || idsAntigos.has(h.id)) return h;            // entrada antiga: não mexe
-    // Entrada NOVA (comentário/anexo/feito): a autoria é carimbada, não confia
-    // no que veio. Isso impede alguém assinar comentário no lugar de outro.
-    return { ...h, por: euNome };
+    if (!h) return h;
+    if (mapaAntigo.has(h.id)) return mapaAntigo.get(h.id);   // congela a antiga
+    return { ...h, por: euNome };                            // carimba a nova
   });
   // Anexo novo também leva a autoria real.
   const idsAnexo = new Set(((atual && atual.anexos) || []).map((a: any) => a.id));

@@ -40,7 +40,12 @@ function pessoasComp() {
   if (!us.some((p) => p.id === 'equipe')) us.unshift({ id: 'equipe', nome: 'Direção' });
   return us;
 }
-const nomeDono = (dono) => (pessoasComp().find((p) => p.id === dono) || {}).nome || dono || '—';
+// Nome de quem é o compromisso. Cai no donoNome que o servidor carimba (pega
+// até quem já foi DESLIGADO, que não vem mais no roster) antes do id cru.
+function nomeDono(dono, donoNome) {
+  const p = pessoasComp().find((x) => x.id === dono);
+  return (p && p.nome) || donoNome || (dono === 'equipe' ? 'Direção' : '') || dono || '—';
+}
 // O telefone só existe no cadastro completo (cfg.usuarios), que só a direção
 // recebe. Para os outros, o WhatsApp abre pedindo o número.
 function telefoneDono(dono) {
@@ -91,7 +96,7 @@ function linhaComp(c, dir, mostraDono) {
           '<div class="meta">' + [
             c.t.rotulo,
             c.referencia ? esc(c.referencia) : '',
-            (mostraDono && c.dono !== meuDono()) ? '👤 ' + esc(nomeDono(c.dono)) : '',
+            (mostraDono && c.dono !== meuDono()) ? '👤 ' + esc(nomeDono(c.dono, c.donoNome)) : '',
             (c.encaminhadoPor ? '↪ veio de ' + esc(c.encaminhadoPor) : ''),
             nFala ? '💬 ' + nFala : '',
             nAnexos ? '📎 ' + nAnexos : ''
@@ -155,7 +160,7 @@ TELAS.compromissos = function (el, args) {
       porDono.get(c.dono).push(c);
     }
     grupos = [...porDono.entries()]
-      .map(([dono, itens]) => ({ nome: '👤 ' + nomeDono(dono), itens }))
+      .map(([dono, itens]) => ({ nome: '👤 ' + nomeDono(dono, (itens[0] || {}).donoNome), itens }))
       .sort((a, b) => a.nome.localeCompare(b.nome));
   } else {
     grupos = [];
@@ -245,7 +250,7 @@ function telaCompromisso(el, id) {
 
   cabecalho(t.icone + ' ' + (c.titulo || 'Compromisso'),
     (c.feito ? 'Concluído' : pz.txt) + ' · ' + t.rotulo +
-      (dir ? ' · 👤 ' + esc(nomeDono(c.dono)) : ''),
+      (dir ? ' · 👤 ' + esc(nomeDono(c.dono, c.donoNome)) : ''),
     '<a class="btn" href="#/compromissos">← Voltar</a>' +
     '<button class="btn" id="cWhats"' + (tel ? '' : ' title="A pessoa não tem WhatsApp no cadastro"') + '>📲 WhatsApp (PDF)</button>' +
     '<button class="btn" id="cEditar">Editar</button>' +
@@ -269,7 +274,7 @@ function telaCompromisso(el, id) {
         '<p style="margin-top:10px">' +
           (c.data ? '<b>Quando:</b> ' + fmt.data(c.data) + (c.hora ? ' às ' + esc(c.hora) : '') +
             ' <span class="etiqueta ' + pz.cls + '">' + esc(c.feito ? 'concluído' : pz.txt) + '</span><br>' : '<b>Sem data marcada.</b><br>') +
-          '<b>De quem é:</b> ' + esc(nomeDono(c.dono)) +
+          '<b>De quem é:</b> ' + esc(nomeDono(c.dono, c.donoNome)) +
             (c.encaminhadoPor ? ' · <span style="color:var(--texto-fraco)">veio de ' + esc(c.encaminhadoPor) + '</span>' : '') + '<br>' +
           (c.obs ? '<b>Observação:</b> ' + esc(c.obs) : '') +
         '</p>' +
@@ -358,12 +363,15 @@ function anexarAoCompromisso(id) {
     if (prog) prog.style.display = '';
     try {
       const meta = await enviarArquivo(file, (p) => { if (prog) prog.querySelector('i').style.width = (p * 100) + '%'; });
-      const base = achar('comp', id);   // relê: o modal/anexo pode ter demorado
+      const base = achar('comp', id);   // relê: o upload pode ter demorado
+      // Se o compromisso saiu da minha lista durante o upload (foi encaminhado),
+      // NÃO crio um compromisso-fantasma só com o anexo — aviso e paro.
+      if (!base) { toast('Este compromisso saiu da sua lista; o anexo não foi vinculado', 'ruim'); return; }
       const anexo = { id: meta.id, arquivoId: meta.id, nome: file.name,
         tamanho: file.size, mime: file.type || meta.mime || '', em: new Date().toISOString(), por: S.quem || '—' };
       salvar('comp', Object.assign({}, base, {
-        anexos: [...((base && base.anexos) || []), anexo],
-        historico: [...((base && base.historico) || []), eventoComp('anexo', 'Anexou ' + file.name)]
+        anexos: [...(base.anexos || []), anexo],
+        historico: [...(base.historico || []), eventoComp('anexo', 'Anexou ' + file.name)]
       }));
       toast('Arquivo anexado', 'bom');
     } catch (e) {
@@ -515,7 +523,7 @@ async function pdfCompromisso(c) {
   doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5); doc.setTextColor(60, 60, 60);
   const linhas = [
     c.data ? 'Quando: ' + fmt.data(c.data) + (c.hora ? ' às ' + c.hora : '') : 'Sem data marcada',
-    'Responsável: ' + nomeDono(c.dono),
+    'Responsável: ' + nomeDono(c.dono, c.donoNome),
     c.referencia ? 'Obra / quem: ' + c.referencia : '',
     c.feito ? 'Situação: CONCLUÍDO' : 'Situação: em aberto',
     c.obs ? 'Observação: ' + c.obs : ''
@@ -531,10 +539,15 @@ async function pdfCompromisso(c) {
     doc.setFont('helvetica', 'normal'); doc.setFontSize(8.6); doc.setTextColor(50, 50, 50);
     for (const h of fio) {
       if (y > 275) { doc.addPage(); y = 15; }
-      const cab = (ICONE_EVENTO[h.tipo] ? '' : '') + fmt.dataHora(h.em) + ' · ' + (h.por || '—') + ':';
+      const cab = fmt.dataHora(h.em) + ' · ' + (h.por || '—') + ':';
       doc.setFont('helvetica', 'bold'); doc.text(cab, 10, y); y += 4;
       doc.setFont('helvetica', 'normal');
-      doc.splitTextToSize(h.texto || '', 188).forEach((ln) => { doc.text(ln, 12, y); y += 4.2; });
+      // Quebra de página DENTRO do comentário também: um comentário longo passava
+      // do rodapé e as linhas seguintes sumiam da folha.
+      doc.splitTextToSize(h.texto || '', 188).forEach((ln) => {
+        if (y > 285) { doc.addPage(); y = 15; }
+        doc.text(ln, 12, y); y += 4.2;
+      });
       y += 1.5;
     }
   }
@@ -588,9 +601,10 @@ async function enviarCompromissoWhats(id) {
   //    resumo — a pessoa anexa o PDF que acabou de baixar.
   doc.save(nomeArq);
   const tel = telefoneDono(c.dono);
-  const numero = tel || await perguntar('Para qual WhatsApp?',
-    { titulo: 'Enviar no WhatsApp', valor: '', ok: 'Abrir conversa', dica: 'Só números, com DDD' });
-  if (numero === null) return;
+  const numero = tel || await perguntar('Para qual WhatsApp? (só números, com DDD)',
+    { titulo: 'Enviar no WhatsApp', valor: '', ok: 'Abrir conversa' });
+  // Fechou o modal (null) ou deixou em branco: não abre conversa sem número.
+  if (!numero) return;
   window.open(linkWhats(numero, resumo + '\n\n(o PDF foi baixado no seu aparelho — anexe aqui)'), '_blank');
   toast('PDF baixado. Anexe-o na conversa que abriu.', 'bom');
 }

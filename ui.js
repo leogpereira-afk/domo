@@ -369,7 +369,11 @@ function numeroBR(v) {
 /* ── WhatsApp ──────────────────────────────────────────────────────────────── */
 function linkWhats(telefone, texto) {
   let d = String(telefone || '').replace(/\D/g, '');
-  if (d && !d.startsWith('55')) d = '55' + d;
+  // Coloca o 55 do Brasil só quando o número NÃO tem código do país: com DDI
+  // são 12-13 dígitos; sem DDI, 10-11. O "startsWith('55')" antigo estragava o
+  // DDD 55 (Santa Maria/Uruguaiana-RS): (55) 99xxx-xxxx tem 11 dígitos e virava
+  // "55 55 9..." — mas só quando já vinha certo. Agora: até 11 dígitos = sem DDI.
+  if (d && d.length <= 11) d = '55' + d;
   return 'https://wa.me/' + d + '?text=' + encodeURIComponent(texto || '');
 }
 
