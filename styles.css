@@ -404,3 +404,24 @@ tfoot td { font-weight: 700; border-top: 2px solid var(--borda); border-bottom: 
 @media (min-width: 901px) {
   .so-celular { display: none; }
 }
+
+/* ── Calendário do RH ──────────────────────────────────────────────────────── */
+.cal-legenda { display: flex; flex-wrap: wrap; gap: 14px; margin: 10px 0; font-size: .82rem; color: var(--texto-fraco); }
+.cal-legenda span { display: inline-flex; align-items: center; gap: 5px; }
+.cal-legenda i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.cal-cab { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; font-size: .78rem; color: var(--texto-fraco); font-weight: 600; text-align: center; margin-bottom: 4px; }
+.cal-grade { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.cal-cel { min-height: 78px; border: 1px solid var(--borda); border-radius: 8px; padding: 4px; background: #fff; overflow: hidden; }
+.cal-cel.vazia { border: none; background: transparent; }
+.cal-cel.cal-hoje { border-color: var(--azul); box-shadow: inset 0 0 0 1px var(--azul); }
+.cal-dia { font-size: .8rem; font-weight: 600; color: var(--texto-fraco); }
+.cal-hoje .cal-dia { color: var(--azul); }
+.cal-ev { font-size: .68rem; line-height: 1.25; border-radius: 4px; padding: 1px 4px; margin-top: 2px; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #fff; }
+.cal-mais { font-size: .66rem; color: var(--texto-fraco); margin-top: 2px; }
+.cal-azul { background: var(--azul); } .cal-verde { background: var(--verde); }
+.cal-ambar { background: var(--ambar); } .cal-vermelho { background: var(--vermelho); }
+@media (max-width: 640px) {
+  .cal-cel { min-height: 58px; }
+  .cal-ev { font-size: .6rem; }
+}

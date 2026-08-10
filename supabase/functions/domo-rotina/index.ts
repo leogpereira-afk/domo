@@ -14,6 +14,7 @@
 import { json } from "../_shared/cors.ts";
 import { NOMES_COLECOES } from "../_shared/colecoes.ts";
 import { cfgSemSegredo } from "../_shared/acesso.ts";
+import { arquivosDoRegistro } from "../_shared/arquivos.ts";
 import {
   db,
   agora,
@@ -36,15 +37,9 @@ const META = "_arqmeta";
 
 const diasAtras = (n: number) => new Date(Date.now() - n * 86400000).toISOString();
 
-function arquivosDoRegistro(o: any): string[] {
-  const ids: string[] = [];
-  if (o.arquivoId) ids.push(o.arquivoId);
-  for (const v of (o.versoes || [])) if (v && v.arquivoId) ids.push(v.arquivoId);
-  for (const r of (o.recebimentos || [])) for (const f of (r.fotos || [])) if (f) ids.push(f);
-  for (const d of (o.diario || [])) for (const f of (d.fotos || [])) if (f) ids.push(f);
-  for (const d of (o.documentos || [])) if (d && d.arquivoId) ids.push(d.arquivoId);
-  return ids;
-}
+// arquivosDoRegistro vem de _shared/arquivos.ts (cópia única). Antes esta cópia
+// não conhecia anexos/asos, então o passo 5 (varredor de órfãos) apagava o PDF
+// do ASO de um colaborador ATIVO ~1 dia depois do upload.
 
 Deno.serve(async (req) => {
   // Roda sozinha, sem ninguém logado: a entrada é um segredo de serviço,

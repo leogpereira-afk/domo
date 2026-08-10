@@ -19,8 +19,9 @@ import { json, preflight } from "../_shared/cors.ts";
 import { COLECOES } from "../_shared/colecoes.ts";
 import {
   PERFIS, identificar, cfgSemSegredo, podeFazer, motivoRecusa, reporProtegidos,
-  filtrarLeitura, hashGuardado, perfilDe, sha256, type Quem,
+  filtrarLeitura, hashGuardado, perfilDe, sha256, COLECOES_SO_DIRECAO, type Quem,
 } from "../_shared/acesso.ts";
+import { arquivosDoRegistro } from "../_shared/arquivos.ts";
 import {
   db, agora, idNovo, tokenCurto, lerUm, gravarUm, lerTudo, apagarDeVez,
   lerCfgBruta, gravarCfg, proximoNumero, guardarIndiceNumero, lerNumeracao,
@@ -77,7 +78,9 @@ async function lerCfg(): Promise<any> {
 // tinha acabado de mandar pelo link.
 const CAMPOS_UNIAO = ["historico", "recebimentos", "cotacoes", "anexos", "medicoes", "versoes",
   "diario", "documentos", "equipe", "avaliacoes", "aditivos", "adiantamentos",
-  "etapas", "responsaveis", "fornecedores"];
+  "etapas", "responsaveis", "fornecedores",
+  // RH (coleção 'pessoa'): cada lista da ficha se junta por id como as demais.
+  "pagamentos", "ferias", "asos"];
 
 // Dentro de cada item unido, estas listas também se juntam em vez de se
 // sobrepor (as remessas e as entregas moram DENTRO da etapa; os preços moram
@@ -105,17 +108,9 @@ function unirPorId(antigo: any, novo: any): any[] {
   return Array.from(vistos.values());
 }
 
-// Todos os arquivos que pertencem a este registro: projeto/documento (com as
-// revisões antigas) e as fotos de recebimento e do diário.
-function arquivosDoRegistro(o: any): string[] {
-  const ids: string[] = [];
-  if (o.arquivoId) ids.push(o.arquivoId);
-  for (const v of (o.versoes || [])) if (v && v.arquivoId) ids.push(v.arquivoId);
-  for (const r of (o.recebimentos || [])) for (const f of (r.fotos || [])) if (f) ids.push(f);
-  for (const d of (o.diario || [])) for (const f of (d.fotos || [])) if (f) ids.push(f);
-  for (const d of (o.documentos || [])) if (d && d.arquivoId) ids.push(d.arquivoId);
-  return Array.from(new Set(ids));
-}
+// arquivosDoRegistro vem de _shared/arquivos.ts — uma cópia só para nucleo,
+// acervo e rotina nunca mais divergirem (era o que deixava o PDF do ASO/anexo
+// escapar da lixeira e do varredor de órfãos).
 
 /* ── Gravação: onde mora a inteligência do sistema ─────────────────────────── */
 async function gravar(col: string, registro: any, por: string): Promise<any> {
@@ -414,6 +409,9 @@ Deno.serve(async (req) => {
         // de ninguém.
         if (perfilDe(quem) !== "direcao") {
           registros = registros.filter((r: any) => r._col !== "comp" || r.dono === quem!.id);
+          // RH é só da direção: o escritório recebe todo o resto sem filtro, então
+          // sem isto veria salário e ASO de todo mundo.
+          registros = registros.filter((r: any) => !COLECOES_SO_DIRECAO.has(r._col));
         }
         const cfgSaida = cfgSemSegredo(cfg);
         // Roster mínimo: só id + nome de quem está ativo, para o "encaminhar
@@ -448,6 +446,12 @@ Deno.serve(async (req) => {
             salvos.push(await gravar("comp", pronto.registro, por));
             continue;
           }
+          // RH: só a direção grava (salário, saúde). O escritório não é 'obra',
+          // então motivoRecusa o deixaria passar — a trava do RH é aqui.
+          if (COLECOES_SO_DIRECAO.has(it.colecao) && perfilDe(quem) !== "direcao") {
+            recusados.push({ colecao: it.colecao, id: it.registro.id, motivo: "só a direção mexe no RH" });
+            continue;
+          }
           // Repõe o que a obra não pode editar com o valor guardado ANTES de
           // julgar: senão a data de entrega velha do cache (ou os itens sem
           // preço) fariam o servidor recusar a OC inteira e o recebimento se
@@ -476,6 +480,11 @@ Deno.serve(async (req) => {
       // Lixeira: marca apagadoEm em vez de sumir com o registro.
       case "apagar": {
         const { colecao, id } = body;
+        // RH só a direção (o escritório não é 'obra', então podeFazer o deixaria
+        // apagar; a leitura ele nem tem, mas a régua tem que valer aqui também).
+        if (COLECOES_SO_DIRECAO.has(colecao) && perfilDe(quem) !== "direcao") {
+          return json({ error: "Só a direção mexe no RH.", semPermissao: true }, 403);
+        }
         const r = await lerUm(colecao, id);
         if (!r) return json({ ok: true });
         r.apagadoEm = agora();

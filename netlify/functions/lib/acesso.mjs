@@ -41,6 +41,9 @@ export const ACOES_DIRECAO = ['salvarCfg', 'trocarSenha', 'esvaziarLixeira', 're
 // Apagar é definitivo o bastante para não ser de quem está no canteiro.
 export const ACOES_NEGADAS_OBRA = ['apagar'];
 
+// Coleções só-direção (RH: salário, ASO/saúde, CPF). Ver a versão Supabase.
+export const COLECOES_SO_DIRECAO = new Set(['pessoa']);
+
 export function hashGuardado(cfg) {
   if (cfg && cfg.senhaHash) return cfg.senhaHash;
   if (!process.env.PAINEL_SENHA) return null;

@@ -19,6 +19,7 @@ export const COLECOES: Record<string, { pre: string; nome: string }> = {
   // Agenda pessoal: cada pessoa vê os seus; a direção vê os de todos. O "dono"
   // é carimbado pelo servidor (mandar dono no corpo não muda nada).
   comp:  { pre: "",   nome: "Compromisso" },
+  pessoa: { pre: "",  nome: "Colaborador" },
 };
 
 export const NOMES_COLECOES = Object.keys(COLECOES);

@@ -43,6 +43,12 @@ export const ACOES_DIRECAO = ["salvarCfg", "trocarSenha", "esvaziarLixeira", "re
 
 export const ACOES_NEGADAS_OBRA = ["apagar"];
 
+// Coleções que SÓ a direção lê e grava — dado sensível de RH (salário na
+// coleção 'pessoa', saúde/ASO, CPF). O escritório recebe TODO o resto sem
+// filtro (não tem `le`), então a exceção do RH mora aqui e é aplicada no
+// snapshot, na gravação e no download de arquivo.
+export const COLECOES_SO_DIRECAO = new Set(["pessoa"]);
+
 export async function hashGuardado(cfg: any): Promise<string | null> {
   if (cfg && cfg.senhaHash) return cfg.senhaHash;
   const env = Deno.env.get("PAINEL_SENHA");

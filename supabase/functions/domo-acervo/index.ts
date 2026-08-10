@@ -12,8 +12,9 @@
 //   <id>/p0, p1 → os pedaços
 // ============================================================================
 import { json, preflight } from "../_shared/cors.ts";
-import { identificar, perfilDe, podeFazer } from "../_shared/acesso.ts";
+import { identificar, perfilDe, podeFazer, COLECOES_SO_DIRECAO } from "../_shared/acesso.ts";
 import { NOMES_COLECOES } from "../_shared/colecoes.ts";
+import { arquivosDoRegistro } from "../_shared/arquivos.ts";
 import {
   agora,
   idNovo,
@@ -32,19 +33,7 @@ import {
 // Não aparece em COLECOES porque não é dado de obra — é encanamento.
 const META = "_arqmeta";
 
-// Todos os ids de arquivo que UM registro usa (planta, revisões, fotos de
-// recebimento e do diário, documento do prestador, e agora os anexos da
-// conversa de compromisso).
-function arquivosDoRegistro(o: any): string[] {
-  const ids: string[] = [];
-  if (o.arquivoId) ids.push(o.arquivoId);
-  for (const v of (o.versoes || [])) if (v && v.arquivoId) ids.push(v.arquivoId);
-  for (const r of (o.recebimentos || [])) for (const f of (r.fotos || [])) if (f) ids.push(f);
-  for (const d of (o.diario || [])) for (const f of (d.fotos || [])) if (f) ids.push(f);
-  for (const d of (o.documentos || [])) if (d && d.arquivoId) ids.push(d.arquivoId);
-  for (const a of (o.anexos || [])) if (a && a.arquivoId) ids.push(a.arquivoId);
-  return ids;
-}
+// arquivosDoRegistro agora vem de _shared/arquivos.ts (cópia única).
 
 // Coleções cujo ARQUIVO o pessoal da obra pode baixar: planta, documento da
 // empresa, cadastro de fornecedor, e as fotos que ela mesma tira no recebimento
@@ -57,14 +46,20 @@ const COLECAO_ARQ_OBRA = new Set(["proj", "doc", "forn", "oc", "os"]);
 // aplica o mesmo filtro do snapshot. Direção e escritório leem tudo; a obra só o
 // que lhe pertence, e nunca o anexo da conversa de outra pessoa.
 async function podeBaixar(eu: any, arquivoId: string): Promise<boolean> {
-  if (perfilDe(eu) !== "obra") return true;   // direção e escritório: tudo
+  const perfil = perfilDe(eu);
+  if (perfil === "direcao") return true;                    // direção: tudo
   const registros = await lerTudo(null, NOMES_COLECOES);
   for (const o of registros) {
     if (!arquivosDoRegistro(o).includes(arquivoId)) continue;
-    if (o._col === "comp") return o.dono === eu.id;         // só a própria agenda
+    if (COLECOES_SO_DIRECAO.has(o._col)) return false;      // RH: nem o escritório
+    if (perfil !== "obra") return true;                     // escritório: o resto tudo
+    if (o._col === "comp") return o.dono === eu.id;         // obra: só a própria agenda
     return COLECAO_ARQ_OBRA.has(o._col);
   }
-  return false;   // arquivo sem registro dono: só direção/escritório
+  // Arquivo órfão (nenhum registro o referencia): só a direção. Um ASO/anexo que
+  // sobre no bucket não pode virar porta dos fundos para o escritório — direção
+  // já devolveu true lá em cima, então aqui é sempre não.
+  return false;
 }
 
 const b64ParaBytes = (b64: string) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));

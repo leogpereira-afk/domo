@@ -17,6 +17,9 @@ export const COLECOES = {
   doc:   { pre: '',   nome: 'Documento' },
   proj:  { pre: '',   nome: 'Projeto' },
   comp:  { pre: '',   nome: 'Compromisso' }
+  // 'pessoa' (RH) é de PROPÓSITO só do Supabase: o backend Netlify legado (ainda
+  // publicado até a virada) não conhece a coleção, então rejeita ler/gravar RH —
+  // fecha o vazamento sem precisar portar o gate só-direção para cá.
 };
 
 export const NOMES_COLECOES = Object.keys(COLECOES);

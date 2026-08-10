@@ -69,6 +69,12 @@ const MENU = [
   { grupo: 'Acervo' },
   { rota: 'projetos', icone: '📐', texto: 'Projetos' },
   { rota: 'documentos', icone: '🗂️', texto: 'Documentos', bolha: () => docsVencendo(30).length },
+  // RH resumido — só a direção vê (não está nas telas de escritório/obra, então
+  // podeVer esconde do menu e o roteador barra por hash).
+  { grupo: 'Pessoas' },
+  { rota: 'pessoas', icone: '👥', texto: 'Colaboradores',
+    bolha: () => (typeof asosVencendo === 'function' ? asosVencendo(30).length : 0) },
+  { rota: 'calendario', icone: '📆', texto: 'Calendário' },
   { grupo: 'Sistema' },
   // Para a direção é a tela de criar acesso; para os outros, só a própria senha.
   { rota: 'usuarios', icone: '👤', texto: () => ehDirecao() ? 'Acessos da equipe' : 'Minha senha',
