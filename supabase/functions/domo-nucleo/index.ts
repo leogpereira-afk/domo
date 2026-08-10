@@ -18,7 +18,7 @@
 import { json, preflight } from "../_shared/cors.ts";
 import { COLECOES } from "../_shared/colecoes.ts";
 import {
-  PERFIS, identificar, cfgSemSegredo, podeFazer, motivoRecusa,
+  PERFIS, identificar, cfgSemSegredo, podeFazer, motivoRecusa, reporProtegidos,
   filtrarLeitura, hashGuardado, perfilDe, sha256, type Quem,
 } from "../_shared/acesso.ts";
 import {
@@ -154,6 +154,11 @@ async function gravar(col: string, registro: any, por: string): Promise<any> {
     // solicitações ligadas. O navegador sozinho não enxerga os recebimentos do
     // outro aparelho e deixaria a solicitação presa em "em compra".
     if (novo.situacao === "entregue" && (!antigo || antigo.situacao !== "entregue")) {
+      // recebidoEm passa a ser carimbado pelo SERVIDOR (como a situação). O
+      // cliente da obra não pode enviar esse campo — reporProtegidos o repõe do
+      // guardado — então, sem isto, uma entrega concluída pela obra ficaria sem
+      // a data em que o material chegou.
+      if (!novo.recebidoEm) novo.recebidoEm = agora();
       for (const sid of (novo.scIds || [])) {
         try {
           const sc = await lerUm("sc", sid);
@@ -443,9 +448,15 @@ Deno.serve(async (req) => {
             salvos.push(await gravar("comp", pronto.registro, por));
             continue;
           }
-          const motivo = motivoRecusa(quem, it.colecao, it.registro, atual);
+          // Repõe o que a obra não pode editar com o valor guardado ANTES de
+          // julgar: senão a data de entrega velha do cache (ou os itens sem
+          // preço) fariam o servidor recusar a OC inteira e o recebimento se
+          // perdia. Para direção/escritório reporProtegidos devolve o registro
+          // intacto.
+          const reg = reporProtegidos(quem, it.colecao, it.registro, atual);
+          const motivo = motivoRecusa(quem, it.colecao, reg, atual);
           if (motivo) { recusados.push({ colecao: it.colecao, id: it.registro.id, motivo }); continue; }
-          salvos.push(await gravar(it.colecao, it.registro, por));
+          salvos.push(await gravar(it.colecao, reg, por));
         }
         if (recusados.length) {
           await registrarLog({

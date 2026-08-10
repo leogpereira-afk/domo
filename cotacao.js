@@ -48,10 +48,19 @@ const linkCotacao = (c, f) =>
 /* ══════════════════════════════════════════════════════════════════════════
    LISTA
    ══════════════════════════════════════════════════════════════════════════ */
+// Mostrar ou não as arquivadas fica FORA da função: sobrevive ao re-render que o
+// próprio botão dispara (a variável reinicia se morar dentro da tela).
+let verCotArquivadas = false;
+
 TELAS.cotacoes = function (el, args) {
   if (args[0]) return telaCotacao(el, args[0]);
 
   const todas = cotacoes();
+  const arquivadas = todas.filter((c) => c.arquivadaEm);
+  // Sem nada arquivado o toggle some da tela; se ficasse preso em true, o
+  // próximo "Arquivar" gravaria mas o cartão continuaria visível.
+  if (!arquivadas.length) verCotArquivadas = false;
+  const visiveis = verCotArquivadas ? todas : todas.filter((c) => !c.arquivadaEm);
   const abertas = todas.filter((c) => c.situacao === 'aberta');
   cabecalho('Cotações', abertas.length + ' em aberto',
     '<button class="btn primario" id="novaCot">+ Nova cotação</button>');
@@ -59,15 +68,27 @@ TELAS.cotacoes = function (el, args) {
   el.innerHTML =
     '<div class="aviso info">Três preços antes de comprar é o que mais economiza dinheiro numa obra. ' +
     'Aqui você manda o pedido de preço no WhatsApp e o fornecedor responde sozinho, sem você redigitar nada.</div>' +
+    // Cotação cancelada ou já resolvida polui a lista: some daqui e fica guardada
+    // atrás deste botão (o histórico continua inteiro dentro dela).
+    (arquivadas.length
+      ? '<div class="barra-acoes" style="margin-bottom:10px">' +
+        '<button class="btn pequeno' + (verCotArquivadas ? ' primario' : '') + '" id="toggleArq">' +
+          (verCotArquivadas ? 'Ocultar arquivadas' : 'Ver arquivadas (' + arquivadas.length + ')') +
+        '</button></div>'
+      : '') +
     '<div class="cartao">' +
-      (todas.length ?
+      (visiveis.length ?
         '<div class="tabela-rolagem"><table><thead><tr><th>Nº</th><th>Itens</th><th>Obra</th>' +
         '<th>Fornecedores</th><th class="num">Melhor preço</th><th>Situação</th></tr></thead><tbody>' +
-        todas.map((c) => {
+        visiveis.map((c) => {
           const resp = (c.fornecedores || []).filter(respondeu);
           const menor = resp.length ? Math.min(...resp.map((f) => totalCotacao(c, f))) : 0;
           const venceu = (c.fornecedores || []).find((f) => f.escolhido);
-          return '<tr class="clicavel" data-id="' + esc(c.id) + '">' +
+          const arq = !!c.arquivadaEm;
+          // Arquivar direto da lista só o que já saiu de cena (cancelada ou
+          // aprovada); cotação aberta não some sob um clique.
+          const podeArquivar = c.situacao !== 'aberta';
+          return '<tr class="clicavel" data-id="' + esc(c.id) + '"' + (arq ? ' style="opacity:.55"' : '') + '>' +
             '<td><b>' + esc(c.codigo || '—') + '</b>' + (c._pendente ? ' <span class="pendente">enviando…</span>' : '') + '</td>' +
             '<td>' + (c.itens || []).length + ' item(ns)' +
               '<div style="font-size:.8rem;color:var(--texto-fraco)">' +
@@ -76,14 +97,42 @@ TELAS.cotacoes = function (el, args) {
             '<td>' + resp.length + ' de ' + (c.fornecedores || []).length + ' responderam</td>' +
             '<td class="num">' + (menor ? fmt.brl(menor) : '—') +
               (venceu ? '<div style="font-size:.8rem;color:var(--verde)">' + esc(venceu.nome) + '</div>' : '') + '</td>' +
-            '<td>' + etiqueta(c.situacao) + '</td></tr>';
+            '<td>' + etiqueta(c.situacao) +
+              (arq ? ' <span class="etiqueta">arquivada</span>' : '') +
+              (podeArquivar
+                ? '<button class="btn pequeno" data-arq="' + esc(c.id) + '" style="margin-left:6px">' +
+                  (arq ? 'Desarquivar' : 'Arquivar') + '</button>'
+                : '') +
+            '</td></tr>';
         }).join('') + '</tbody></table></div>'
-        : vazio('💵', 'Nenhuma cotação', 'Aprove uma solicitação e mande para cotação — ou crie uma direto aqui.')) +
+        : vazio('💵', verCotArquivadas ? 'Nada arquivado' : 'Nenhuma cotação',
+            'Aprove uma solicitação e mande para cotação — ou crie uma direto aqui.')) +
     '</div>';
 
   el.querySelectorAll('tr[data-id]').forEach((tr) => tr.addEventListener('click', () => irPara('cotacoes/' + tr.dataset.id)));
+  el.querySelectorAll('[data-arq]').forEach((b) => b.addEventListener('click', (ev) => {
+    ev.stopPropagation();   // clicar em Arquivar não abre a cotação
+    arquivarCotacao(b.dataset.arq);
+  }));
+  const tg = document.getElementById('toggleArq');
+  if (tg) tg.addEventListener('click', () => { verCotArquivadas = !verCotArquivadas; render(); });
   document.getElementById('novaCot').addEventListener('click', () => abrirNovaCotacao(null));
 };
+
+// Arquivar/desarquivar é gravação SUAVE (salvar com arquivadaEm), não a rota
+// 'apagar': funciona offline, é reversível e o histórico da cotação registra.
+function arquivarCotacao(id) {
+  const c = achar('cot', id);
+  if (!c) { toast('Cotação não encontrada — atualize a tela', 'ruim'); return; }
+  const desarq = !!c.arquivadaEm;
+  const n = Object.assign({}, c, desarq
+    ? { arquivadaEm: null, arquivadaPor: null }
+    : { arquivadaEm: new Date().toISOString(), arquivadaPor: S.quem || '—' });
+  n.historico = historiar(c, desarq ? 'Cotação desarquivada' : 'Cotação arquivada');
+  salvar('cot', n);
+  render();
+  toast(desarq ? 'Cotação desarquivada' : 'Cotação arquivada — saiu da lista principal', 'bom');
+}
 
 /* ══════════════════════════════════════════════════════════════════════════
    CRIAR (a partir de uma solicitação ou do zero)
@@ -172,7 +221,9 @@ function abrirNovaCotacao(sc, convidados) {
    ══════════════════════════════════════════════════════════════════════════ */
 function telaCotacao(el, id) {
   const c = achar('cot', id);
-  if (!c) { cabecalho('Cotação', ''); el.innerHTML = vazio('🤔', 'Não encontrada'); return; }
+  // Cotação na lixeira (apagadoEm) não abre viva — senão reapareceria com
+  // Arquivar/Excluir depois de já ter sido excluída.
+  if (!c || c.apagadoEm) { cabecalho('Cotação', ''); el.innerHTML = vazio('🤔', 'Não encontrada'); return; }
 
   const fs = c.fornecedores || [];
   const respondidos = fs.filter(respondeu);
@@ -282,7 +333,23 @@ function telaCotacao(el, id) {
       (c.ocId ? '<button class="btn" data-veroc="' + esc(c.ocId) + '" style="width:100%">Abrir ordem de compra</button>' : '') +
       '</div>' +
       '<div class="cartao"><h3>Histórico</h3>' + linhaTempo(c.historico) + '</div>' +
-      (aberta ? '<div class="cartao"><button class="btn perigo" id="cancelarCot" style="width:100%">Cancelar cotação</button></div>' : '') +
+      (aberta
+        ? '<div class="cartao"><button class="btn perigo" id="cancelarCot" style="width:100%">Cancelar cotação</button></div>'
+        // Cotação já resolvida (cancelada/aprovada): dá para tirar da lista sem
+        // perder o registro. Excluir de vez (lixeira) fica só para a cancelada —
+        // uma cotação aprovada é prova da pesquisa de preço, não se joga fora.
+        : '<div class="cartao">' +
+            '<div class="barra-acoes">' +
+              '<button class="btn" id="arquivarCot" style="flex:1">' +
+                (c.arquivadaEm ? 'Desarquivar' : 'Arquivar') + '</button>' +
+              (c.situacao === 'cancelada' && perfilAtual() !== 'obra'
+                ? '<button class="btn perigo" id="excluirCot" style="flex:1">Excluir</button>' : '') +
+            '</div>' +
+            (c.arquivadaEm
+              ? '<p class="legenda" style="margin-top:8px">Arquivada em ' + fmt.data(c.arquivadaEm) +
+                '. Sai da lista principal; o histórico continua aqui dentro.</p>'
+              : '') +
+          '</div>') +
     '</div></div>';
 
   const bc = document.getElementById('convidar');
@@ -326,6 +393,22 @@ function telaCotacao(el, id) {
     // ficava presa em "Em cotação" para sempre, sem cotação nenhuma.
     for (const sid of (atual.scIds || [])) recalcularSC(sid, 'Cotação ' + (atual.codigo || '') + ' cancelada');
     render();
+  });
+
+  const ba = document.getElementById('arquivarCot');
+  if (ba) ba.addEventListener('click', () => arquivarCotacao(c.id));
+
+  const bex = document.getElementById('excluirCot');
+  if (bex) bex.addEventListener('click', async () => {
+    if (!await confirmar('Excluir esta cotação? Vai para a lixeira — a direção pode restaurar.',
+      { perigo: true, ok: 'Excluir' })) return;
+    // 'apagar' vai direto ao servidor (não passa pela fila offline): sem sinal,
+    // avisa em vez de estourar um "Failed to fetch" técnico na obra.
+    if (!navigator.onLine) { toast('Sem internet agora — tente quando conectar', 'ruim'); return; }
+    try { await api('apagar', { colecao: 'cot', id: c.id }); }
+    catch (e) { toast('Não consegui excluir: ' + e.message, 'ruim'); return; }
+    await puxar();
+    irPara('cotacoes');
   });
 }
 

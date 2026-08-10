@@ -360,7 +360,7 @@ function telaSolicitacao(el, id) {
             '</div></div>';
         })() +
         (s.cotIds && s.cotIds.length ? '<div class="cartao"><h3>Cotações</h3>' +
-          s.cotIds.map((cid) => { const c = achar('cot', cid); return c ?
+          s.cotIds.map((cid) => { const c = achar('cot', cid); return (c && !c.apagadoEm) ?
             '<div class="arquivo-solto"><span class="ic">💵</span><div><div class="nome">' + esc(c.codigo || '—') + '</div>' +
             '<div class="meta">' + (c.fornecedores || []).filter((f) => f.respondidoEm).length + ' de ' +
             (c.fornecedores || []).length + ' responderam</div></div>' +
@@ -1126,6 +1126,11 @@ TELAS.recebimento = function (el) {
         '</tbody></table>' +
         '<div class="barra-acoes" style="margin-top:10px">' +
           '<button class="btn verde" data-receber="' + esc(o.id) + '">📦 Registrar recebimento</button>' +
+          // A data de entrega é uma condição de compra: quem edita é o escritório/
+          // direção. O celular da obra recebe a ordem SEM os preços, e regravá-la
+          // por aqui apagaria o valor — por isso o botão não aparece para a obra.
+          (perfilAtual() !== 'obra'
+            ? '<button class="btn" data-data="' + esc(o.id) + '">📅 Data de entrega</button>' : '') +
           '<button class="btn" data-abrir="' + esc(o.id) + '">Ver ordem</button>' +
           ((o.fornecedor || {}).telefone ? '<button class="btn zap" data-cobrar="' + esc(o.id) + '">Cobrar entrega</button>' : '') +
         '</div>' +
@@ -1139,6 +1144,7 @@ TELAS.recebimento = function (el) {
     telaReceberOC(oc);
   }));
   el.querySelectorAll('[data-abrir]').forEach((b) => b.addEventListener('click', () => irPara('compras/' + b.dataset.abrir)));
+  el.querySelectorAll('[data-data]').forEach((b) => b.addEventListener('click', () => editarDataEntrega(b.dataset.data)));
   el.querySelectorAll('[data-cobrar]').forEach((b) => b.addEventListener('click', () => {
     const o = achar('oc', b.dataset.cobrar);
     if (!o) { toast('Esta ordem não existe mais — atualize a tela', 'ruim'); return; }
@@ -1147,6 +1153,32 @@ TELAS.recebimento = function (el) {
       ': poderia confirmar a data de entrega? Obrigado.'), '_blank');
   }));
 };
+
+// Corrige a data prevista de entrega sem precisar abrir a ordem inteira — é o
+// campo que faz a etiqueta de "X dias de atraso" bater com a realidade quando o
+// fornecedor remarca. Só escritório/direção chegam aqui (a obra recebe a ordem
+// sem os preços; regravá-la apagaria o valor).
+async function editarDataEntrega(id) {
+  const oc = achar('oc', id);
+  if (!oc) { toast('Esta ordem não existe mais — atualize a tela', 'ruim'); return; }
+  const nova = await perguntarData('Nova data prevista de entrega', {
+    titulo: 'Data de entrega — ' + (oc.codigo || ''),
+    valor: (oc.entregaPrevista || '').slice(0, 10),
+    ok: 'Salvar'
+  });
+  if (!nova) return;
+  // Relê antes de gravar: o modal fica aberto e o escritório pode ter mexido na
+  // ordem nesse meio-tempo — gravar o retrato velho desfaria a alteração dele.
+  const base = achar('oc', id) || oc;
+  const antes = (base.entregaPrevista || '').slice(0, 10);
+  if (antes === nova) { toast('A data continua a mesma', 'bom'); return; }
+  const n = Object.assign({}, base, { entregaPrevista: nova });
+  n.historico = historiar(base, 'Entrega prevista alterada para ' + fmt.data(nova) +
+    (antes ? ' (antes ' + fmt.data(antes) + ')' : ''));
+  salvar('oc', n);
+  render();
+  toast('Data de entrega atualizada', 'bom');
+}
 
 // Quanto de cada item já foi recebido em entregas anteriores.
 function jaRecebido(o, itemId) {

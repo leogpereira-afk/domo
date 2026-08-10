@@ -115,6 +115,32 @@ export function motivoRecusa(quem: Quem | null, colecao: string, registro: any, 
   return "";
 }
 
+// Repõe, a partir do que ESTÁ GUARDADO, todo campo que a obra não pode editar —
+// ANTES de julgar e gravar. O celular da obra lê a ordem SEM preço (semValores)
+// e pode estar com uma data de entrega velha no cache; sem isto, gravar um
+// recebimento era RECUSADO por causa desses campos (entregaPrevista, itens sem
+// preço, nf) e o recebimento — a prova de que o material chegou — sumia da fila.
+// Repor (em vez de afrouxar a régua) mantém intacto o que o escritório mexeu e
+// preserva os preços: a obra só consegue tocar nos campos de CAMPOS_OBRA.
+export function reporProtegidos(quem: Quem | null, colecao: string, registro: any, atual: any): any {
+  if (perfilDe(quem) !== "obra" || !atual) return registro;
+  const permitidos = CAMPOS_OBRA[colecao];
+  if (!permitidos) return registro;   // coleção sem régua de campo (sc, comp…)
+  const saida: any = { ...registro };
+  // Campo protegido presente no guardado: volta ao valor guardado.
+  for (const k of Object.keys(atual)) {
+    if (permitidos.includes(k) || k === "id") continue;
+    saida[k] = atual[k];
+  }
+  // Campo protegido que a obra tentou INTRODUZIR (não existe no guardado): sai,
+  // para não entrar lixo novo por baixo da régua.
+  for (const k of Object.keys(registro)) {
+    if (permitidos.includes(k) || k === "id") continue;
+    if (!(k in atual)) delete saida[k];
+  }
+  return saida;
+}
+
 export function podeFazer(quem: Quem | null, action: string): boolean {
   if (!quem) return false;
   const perfil = perfilDe(quem);

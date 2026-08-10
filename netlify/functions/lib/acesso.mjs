@@ -114,6 +114,26 @@ export function motivoRecusa(quem, colecao, registro, atual) {
   return '';
 }
 
+// Repõe do que está guardado todo campo que a obra não pode editar, ANTES de
+// julgar/gravar (ver a versão em supabase/functions/_shared/acesso.ts). Sem
+// isso, a data de entrega velha do cache da obra fazia o servidor recusar o
+// recebimento inteiro.
+export function reporProtegidos(quem, colecao, registro, atual) {
+  if (perfilDe(quem) !== 'obra' || !atual) return registro;
+  const permitidos = CAMPOS_OBRA[colecao];
+  if (!permitidos) return registro;
+  const saida = { ...registro };
+  for (const k of Object.keys(atual)) {
+    if (permitidos.includes(k) || k === 'id') continue;
+    saida[k] = atual[k];
+  }
+  for (const k of Object.keys(registro)) {
+    if (permitidos.includes(k) || k === 'id') continue;
+    if (!(k in atual)) delete saida[k];
+  }
+  return saida;
+}
+
 export function podeFazer(quem, action) {
   if (!quem) return false;
   const perfil = perfilDe(quem);
