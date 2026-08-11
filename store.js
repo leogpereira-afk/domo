@@ -35,7 +35,8 @@ const K = {
   quem: 'domo_quem',
   senha: 'domo_senha',
   perfil: 'domo_perfil',
-  usuario: 'domo_usuario'
+  usuario: 'domo_usuario',
+  gruposMenu: 'domo_grupos_recolhidos'
 };
 
 // Espelho do que o servidor faz valer (lib/acesso.mjs). Serve só para não

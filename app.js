@@ -111,18 +111,47 @@ function montarShell() {
   });
 }
 
+// Grupos do menu que estão recolhidos, lembrados entre sessões.
+let gruposRecolhidos = new Set();
+try { gruposRecolhidos = new Set(JSON.parse(localStorage.getItem(K.gruposMenu) || '[]')); } catch { /* começa aberto */ }
+
 function pintarMenu(telaAtiva) {
   const visivel = MENU.filter((m) => m.grupo || podeVer(m.rota));
-  // Grupo sem nenhum item visível não aparece (o pessoal da obra não vê o
-  // título "Sistema" sozinho no meio do menu).
-  const html = visivel.filter((m, i) => !m.grupo || (visivel[i + 1] && !visivel[i + 1].grupo)).map((m) => {
-    if (m.grupo) return '<div class="grupo">' + esc(m.grupo) + '</div>';
-    const n = m.bolha ? m.bolha() : 0;
-    return '<a href="#/' + m.rota + '" class="' + (m.rota === telaAtiva ? 'ativo' : '') + '">' +
-      '<span class="ic">' + m.icone + '</span>' + esc(typeof m.texto === 'function' ? m.texto() : m.texto) +
-      (n ? '<span class="bolha">' + n + '</span>' : '') + '</a>';
+  // Quebra o menu em seções: cada item entra sob o último título de grupo.
+  const secoes = [];
+  let atual = null;
+  for (const m of visivel) {
+    if (m.grupo) { atual = { nome: m.grupo, itens: [] }; secoes.push(atual); }
+    else if (atual) atual.itens.push(m);
+    else { atual = { nome: '', itens: [m] }; secoes.push(atual); }
+  }
+  // Grupo sem nenhum item visível não aparece (o pessoal da obra não vê o título
+  // "Sistema" sozinho). O título vira botão: clicar recolhe/expande a seção.
+  const html = secoes.filter((s) => s.itens.length).map((s) => {
+    const itensHtml = s.itens.map((m) => {
+      const n = m.bolha ? m.bolha() : 0;
+      return '<a href="#/' + m.rota + '" class="' + (m.rota === telaAtiva ? 'ativo' : '') + '">' +
+        '<span class="ic">' + m.icone + '</span>' + esc(typeof m.texto === 'function' ? m.texto() : m.texto) +
+        (n ? '<span class="bolha">' + n + '</span>' : '') + '</a>';
+    }).join('');
+    if (!s.nome) return itensHtml;
+    const recolhido = gruposRecolhidos.has(s.nome);
+    // Recolhido, mostra a soma das bolhas da seção — senão some o "tem 3 coisas aqui".
+    const totalBolha = s.itens.reduce((t, m) => t + (m.bolha ? m.bolha() : 0), 0);
+    return '<div class="grupo-bloco' + (recolhido ? ' recolhido' : '') + '">' +
+      '<button type="button" class="grupo" data-grupo="' + esc(s.nome) + '">' +
+        '<span class="grupo-seta">▾</span>' + esc(s.nome) +
+        (recolhido && totalBolha ? '<span class="bolha">' + totalBolha + '</span>' : '') +
+      '</button>' +
+      '<div class="grupo-itens">' + itensHtml + '</div></div>';
   }).join('');
   document.getElementById('menu').innerHTML = html;
+  document.querySelectorAll('#menu .grupo[data-grupo]').forEach((b) => b.addEventListener('click', () => {
+    const g = b.dataset.grupo;
+    if (gruposRecolhidos.has(g)) gruposRecolhidos.delete(g); else gruposRecolhidos.add(g);
+    try { localStorage.setItem(K.gruposMenu, JSON.stringify([...gruposRecolhidos])); } catch { /* sem espaço, tudo bem */ }
+    pintarMenu(telaAtiva);
+  }));
 
   const pend = S.fila.length;
   const rodape = document.getElementById('rodapeLateral');
