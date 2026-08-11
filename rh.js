@@ -473,9 +473,12 @@ function eventosDoMes(ymd) {
   const porDia = {};
   const add = (dia, ev) => { (porDia[dia] || (porDia[dia] = [])).push(ev); };
   const noMes = (d) => d && d.slice(0, 7) === ymd;
+  // RH (férias / ASO / pagamentos) — só a direção recebe a coleção 'pessoa'; para
+  // os outros pessoas() vem vazia, então nada de RH aparece no calendário deles.
   for (const p of pessoas()) {
     if (p.apagadoEm || p.ativo === false) continue;   // inativo não gera alerta
     const nome = (p.nome || '—').split(' ')[0];
+    const irP = 'pessoas/' + p.id;
     for (const f of feriasP(p)) {
       if (!f.inicio || !f.fim) continue;
       if (f.fim.slice(0, 7) < ymd) continue;                       // período já passou
@@ -484,18 +487,25 @@ function eventosDoMes(ymd) {
       let dia = f.inicio < ymd + '-01' ? ymd + '-01' : f.inicio;
       for (; dia <= f.fim; dia = proximoDia(dia)) {
         if (dia.slice(0, 7) > ymd) break;
-        if (noMes(dia)) add(dia, { tipo: 'ferias', cor: 'azul', txt: nome + ' — férias', pid: p.id });
+        if (noMes(dia)) add(dia, { cor: 'azul', txt: nome + ' — férias', ir: irP });
       }
     }
     for (const a of asosP(p)) {
       if (noMes(a.validadeEm)) {
         const venc = diasAte(a.validadeEm) < 0;
-        add(a.validadeEm, { tipo: 'aso', cor: venc ? 'vermelho' : 'ambar', txt: nome + ' — ASO vence', pid: p.id });
+        add(a.validadeEm, { cor: venc ? 'vermelho' : 'ambar', txt: nome + ' — ASO vence', ir: irP });
       }
     }
     for (const x of pgtosP(p)) {
-      if (noMes(x.pagoEm)) add(x.pagoEm, { tipo: 'pgto', cor: 'verde', txt: nome + ' — ' + fmt.brl(x.valor), pid: p.id });
+      if (noMes(x.pagoEm)) add(x.pagoEm, { cor: 'verde', txt: nome + ' — ' + fmt.brl(x.valor), ir: irP });
     }
+  }
+  // Compromissos com data no mês — o servidor já entrega só os do próprio dono
+  // para quem não é direção, então cada um vê a própria agenda (a direção, todas).
+  for (const c of lista('comp')) {
+    if (c.apagadoEm || c.feito || !noMes(c.data)) continue;
+    const t = (typeof tipoComp === 'function') ? tipoComp(c.tipo) : { icone: '📌' };
+    add(c.data, { cor: 'roxo', txt: t.icone + ' ' + (c.titulo || 'Compromisso'), ir: 'compromissos/' + c.id });
   }
   return porDia;
 }
@@ -506,12 +516,52 @@ function proximoDia(ymd) {
   return dt.toISOString().slice(0, 10);
 }
 
+// Lembrete = um compromisso do tipo 'lembrete' (🔔). Modal enxuto, e ao salvar
+// FICA no calendário (não pula para a conversa como o compromisso normal). O
+// dono sai de meuDono() e o servidor carimba de novo — o lembrete é de quem cria.
+function novoLembrete(dia) {
+  abrirModal({
+    titulo: '🔔 Novo lembrete',
+    corpo: '<div id="fLemb">' +
+      campo('Lembrar de quê?', entrada('titulo', '', { placeholder: 'Ex.: Ligar para o cartório' })) +
+      '<div class="linha">' +
+        campo('Data', entrada('data', dia || hojeISO(), { tipo: 'date' })) +
+        campo('Hora (opcional)', entrada('hora', '', { tipo: 'time' })) +
+      '</div>' +
+      campo('Observação', entrada('obs', '', { placeholder: 'Detalhe, telefone, o que levar…' })) +
+    '</div>',
+    acoes: [
+      { texto: 'Voltar', aoClicar: () => fecharModal() },
+      { texto: 'Salvar lembrete', classe: 'primario', aoClicar: (fundo) => {
+        const d = lerCampos(fundo.querySelector('#fLemb'));
+        if (!d.titulo.trim()) { toast('Escreva o lembrete', 'ruim'); return; }
+        if (!d.data) { toast('Escolha a data', 'ruim'); return; }
+        const criado = (typeof eventoComp === 'function')
+          ? eventoComp('criado', 'Criou o lembrete')
+          : { id: idRH(), em: new Date().toISOString(), por: S.quem || '—', tipo: 'criado', texto: 'Criou o lembrete' };
+        salvar('comp', {
+          titulo: d.titulo.trim(), tipo: 'lembrete', data: d.data, hora: d.hora, obs: (d.obs || '').trim(),
+          dono: (typeof meuDono === 'function' ? meuDono() : 'equipe'),
+          historico: [criado]
+        });
+        fecharModal(); render();
+        toast('Lembrete adicionado', 'bom');
+      } }
+    ]
+  });
+}
+
 TELAS.calendario = function (el) {
   if (!calMes) calMes = hojeISO().slice(0, 7);
   const [ano, mes] = calMes.split('-').map(Number);
   const nm = new Date(ano, mes - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
   const nomeMes = nm.charAt(0).toUpperCase() + nm.slice(1);   // "Setembro de 2026"
-  cabecalho('Calendário', 'Férias, ASOs vencendo e pagamentos', '<a class="btn" href="#/pessoas">← Colaboradores</a>');
+  // A direção vê o calendário completo (agenda + RH); os outros só a própria
+  // agenda de compromissos (o RH nem chega no aparelho deles).
+  const dir = typeof ehDirecao === 'function' && ehDirecao();
+  cabecalho('Calendário', dir ? 'Compromissos, férias, ASOs vencendo e pagamentos' : 'Seus compromissos',
+    '<button class="btn primario" id="calLembrete">🔔 + Lembrete</button>' +
+    (dir ? '<a class="btn" href="#/pessoas">← Colaboradores</a>' : ''));
 
   const eventos = eventosDoMes(calMes);
   const diasNoMes = new Date(ano, mes, 0).getDate();
@@ -525,9 +575,12 @@ TELAS.calendario = function (el) {
     const iso = ano + '-' + pad(mes) + '-' + pad(dia);
     const evs = eventos[iso] || [];
     const chips = evs.slice(0, 3).map((e) =>
-      '<div class="cal-ev cal-' + e.cor + '" data-pid="' + esc(e.pid) + '" title="' + esc(e.txt) + '">' + esc(e.txt) + '</div>').join('') +
+      '<div class="cal-ev cal-' + e.cor + '" data-ir="' + esc(e.ir) + '" title="' + esc(e.txt) + '">' + esc(e.txt) + '</div>').join('') +
       (evs.length > 3 ? '<div class="cal-mais">+' + (evs.length - 3) + '</div>' : '');
-    celulas.push('<div class="cal-cel' + (iso === hoje ? ' cal-hoje' : '') + '">' +
+    // A célula é clicável para criar um lembrete naquele dia (o chip para em cima
+    // com stopPropagation e navega em vez de abrir o lembrete).
+    celulas.push('<div class="cal-cel' + (iso === hoje ? ' cal-hoje' : '') + '" data-dia="' + iso +
+      '" title="Adicionar lembrete em ' + fmt.data(iso) + '">' +
       '<div class="cal-dia">' + dia + '</div>' + chips + '</div>');
   }
 
@@ -540,10 +593,13 @@ TELAS.calendario = function (el) {
           '<button class="btn pequeno" id="calProx">→</button></div>' +
       '</div>' +
       '<div class="cal-legenda">' +
-        '<span><i class="cal-azul"></i>Férias</span>' +
-        '<span><i class="cal-ambar"></i>ASO vencendo</span>' +
-        '<span><i class="cal-vermelho"></i>ASO vencido</span>' +
-        '<span><i class="cal-verde"></i>Pagamento</span></div>' +
+        '<span><i class="cal-roxo"></i>Compromisso</span>' +
+        (dir
+          ? '<span><i class="cal-azul"></i>Férias</span>' +
+            '<span><i class="cal-ambar"></i>ASO vencendo</span>' +
+            '<span><i class="cal-vermelho"></i>ASO vencido</span>' +
+            '<span><i class="cal-verde"></i>Pagamento</span>'
+          : '') + '</div>' +
       '<div class="cal-cab">' + ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map((d) => '<div>' + d + '</div>').join('') + '</div>' +
       '<div class="cal-grade">' + celulas.join('') + '</div>' +
     '</div>';
@@ -556,5 +612,9 @@ TELAS.calendario = function (el) {
   document.getElementById('calAnt').addEventListener('click', () => passo(-1));
   document.getElementById('calProx').addEventListener('click', () => passo(1));
   document.getElementById('calHoje').addEventListener('click', () => { calMes = hojeISO().slice(0, 7); render(); });
-  el.querySelectorAll('.cal-ev[data-pid]').forEach((c) => c.addEventListener('click', () => irPara('pessoas/' + c.dataset.pid)));
+  document.getElementById('calLembrete').addEventListener('click', () => novoLembrete(hojeISO()));
+  // Chip: navega para o item e NÃO deixa o clique chegar na célula (que criaria lembrete).
+  el.querySelectorAll('.cal-ev[data-ir]').forEach((c) => c.addEventListener('click', (ev) => { ev.stopPropagation(); irPara(c.dataset.ir); }));
+  // Clique na célula (dia) cria um lembrete já com a data.
+  el.querySelectorAll('.cal-cel[data-dia]').forEach((c) => c.addEventListener('click', () => novoLembrete(c.dataset.dia)));
 };

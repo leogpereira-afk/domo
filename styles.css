@@ -417,7 +417,11 @@ tfoot td { font-weight: 700; border-top: 2px solid var(--borda); border-bottom: 
 .cal-legenda i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
 .cal-cab { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; font-size: .78rem; color: var(--texto-fraco); font-weight: 600; text-align: center; margin-bottom: 4px; }
 .cal-grade { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
-.cal-cel { min-height: 78px; border: 1px solid var(--borda); border-radius: 8px; padding: 4px; background: #fff; overflow: hidden; }
+.cal-cel { position: relative; min-height: 78px; border: 1px solid var(--borda); border-radius: 8px; padding: 4px; background: #fff; overflow: hidden; }
+.cal-cel[data-dia] { cursor: pointer; }
+.cal-cel[data-dia]:hover { border-color: var(--azul); background: var(--azul-claro); }
+/* "+" discreto no canto ao passar o mouse, dica de que dá para adicionar lembrete */
+.cal-cel[data-dia]:hover::after { content: '＋'; position: absolute; top: 2px; right: 5px; color: var(--azul); font-weight: 700; font-size: .9rem; }
 .cal-cel.vazia { border: none; background: transparent; }
 .cal-cel.cal-hoje { border-color: var(--azul); box-shadow: inset 0 0 0 1px var(--azul); }
 .cal-dia { font-size: .8rem; font-weight: 600; color: var(--texto-fraco); }
@@ -427,6 +431,7 @@ tfoot td { font-weight: 700; border-top: 2px solid var(--borda); border-bottom: 
 .cal-mais { font-size: .66rem; color: var(--texto-fraco); margin-top: 2px; }
 .cal-azul { background: var(--azul); } .cal-verde { background: var(--verde); }
 .cal-ambar { background: var(--ambar); } .cal-vermelho { background: var(--vermelho); }
+.cal-roxo { background: #6d28d9; }
 @media (max-width: 640px) {
   .cal-cel { min-height: 58px; }
   .cal-ev { font-size: .6rem; }

@@ -13,6 +13,7 @@
 // Cada tipo tem ícone: numa lista de 20 linhas, o ícone diz o que é antes de a
 // pessoa ler o título. Vocabulário de obra, não de vendas.
 const TIPOS_COMP = {
+  lembrete:  { rotulo: 'Lembrete', icone: '🔔' },
   visita:    { rotulo: 'Visita à obra', icone: '🏗️' },
   reuniao:   { rotulo: 'Reunião', icone: '🤝' },
   medicao:   { rotulo: 'Medição', icone: '📏' },

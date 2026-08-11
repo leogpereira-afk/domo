@@ -19,13 +19,13 @@ const PERFIS_APP = {
       'configurações da empresa e não esvazia a lixeira.',
     telas: ['painel', 'solicitacoes', 'cotacoes', 'compras', 'recebimento', 'servicos',
       'cronogramas', 'acompanhamento', 'fornecedores', 'prestadores', 'projetos', 'documentos',
-      'compromissos', 'acessos', 'usuarios']
+      'compromissos', 'calendario', 'acessos', 'usuarios']
   },
   obra: {
     txt: 'Obra / almoxarifado',
     desc: 'Pede material, recebe a carga, lança o diário e consulta projeto e cronograma. ' +
       'Não aprova compra, não apaga nada e não vê configurações.',
-    telas: ['painel', 'solicitacoes', 'recebimento', 'cronogramas', 'projetos', 'documentos', 'compromissos', 'usuarios']
+    telas: ['painel', 'solicitacoes', 'recebimento', 'cronogramas', 'projetos', 'documentos', 'compromissos', 'calendario', 'usuarios']
   }
 };
 
@@ -64,6 +64,7 @@ const MENU = [
   // mesma agenda — uma aba só, com as duas listas dentro.
   { rota: 'compromissos', icone: '🗓️', texto: 'Compromissos',
     bolha: () => (typeof meusCompromissosUrgentes === 'function' ? meusCompromissosUrgentes() : 0) },
+  { rota: 'calendario', icone: '📆', texto: 'Calendário' },
   { rota: 'fornecedores', icone: '🏢', texto: 'Fornecedores e prestadores',
     bolha: () => prestadoresComPendencia() },
   { grupo: 'Acervo' },
@@ -74,7 +75,6 @@ const MENU = [
   { grupo: 'Pessoas' },
   { rota: 'pessoas', icone: '👥', texto: 'Colaboradores',
     bolha: () => (typeof asosVencendo === 'function' ? asosVencendo(30).length : 0) },
-  { rota: 'calendario', icone: '📆', texto: 'Calendário' },
   { grupo: 'Sistema' },
   // Para a direção é a tela de criar acesso; para os outros, só a própria senha.
   { rota: 'usuarios', icone: '👤', texto: () => ehDirecao() ? 'Acessos da equipe' : 'Minha senha',
