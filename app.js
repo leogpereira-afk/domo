@@ -100,6 +100,10 @@ function montarShell() {
           '<button class="hamburguer" id="btnMenu" aria-label="Menu">☰</button>' +
           '<div><h1 id="tituloTela">Painel</h1><div class="sub" id="subTela"></div></div>' +
           '<div class="dir" id="acoesTopo"></div>' +
+          // Atalho FIXO (fora do #acoesTopo, que cada tela reescreve): a tabela
+          // de vendas do Edifício Diamond, sempre à mão no canto direito.
+          '<a class="atalho-tabela" href="https://diamond-vendas.netlify.app/" target="_blank" rel="noopener" ' +
+            'title="Tabela de vendas — Edifício Diamond">📊 <span>Tabela</span></a>' +
         '</header>' +
         '<div class="pagina" id="pagina"></div>' +
       '</main>' +
