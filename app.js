@@ -19,13 +19,13 @@ const PERFIS_APP = {
       'configurações da empresa e não esvazia a lixeira.',
     telas: ['painel', 'solicitacoes', 'cotacoes', 'compras', 'recebimento', 'servicos',
       'cronogramas', 'acompanhamento', 'fornecedores', 'prestadores', 'projetos', 'documentos',
-      'compromissos', 'calendario', 'acessos', 'usuarios']
+      'compromissos', 'calendario', 'tabela-diamond', 'acessos', 'usuarios']
   },
   obra: {
     txt: 'Obra / almoxarifado',
     desc: 'Pede material, recebe a carga, lança o diário e consulta projeto e cronograma. ' +
       'Não aprova compra, não apaga nada e não vê configurações.',
-    telas: ['painel', 'solicitacoes', 'recebimento', 'cronogramas', 'projetos', 'documentos', 'compromissos', 'calendario', 'usuarios']
+    telas: ['painel', 'solicitacoes', 'recebimento', 'cronogramas', 'projetos', 'documentos', 'compromissos', 'calendario', 'tabela-diamond', 'usuarios']
   }
 };
 
@@ -68,6 +68,10 @@ const MENU = [
   { rota: 'fornecedores', icone: '🏢', texto: 'Fornecedores e prestadores',
     bolha: () => prestadoresComPendencia() },
   { grupo: 'Acervo' },
+  // A tabela de vendas do Diamond é OUTRO sistema (mesmo backend Supabase);
+  // entra aqui como atalho, além do botão fixo no topo.
+  { rota: 'tabela-diamond', icone: '📊', texto: 'Tabela de vendas',
+    externo: 'https://leogpereira-afk.github.io/diamond/' },
   { rota: 'projetos', icone: '📐', texto: 'Projetos' },
   { rota: 'documentos', icone: '🗂️', texto: 'Documentos', bolha: () => docsVencendo(30).length },
   // RH resumido — só a direção vê (não está nas telas de escritório/obra, então
@@ -102,7 +106,7 @@ function montarShell() {
           '<div class="dir" id="acoesTopo"></div>' +
           // Atalho FIXO (fora do #acoesTopo, que cada tela reescreve): a tabela
           // de vendas do Edifício Diamond, sempre à mão no canto direito.
-          '<a class="atalho-tabela" href="https://diamond-vendas.netlify.app/" target="_blank" rel="noopener" ' +
+          '<a class="atalho-tabela" href="https://leogpereira-afk.github.io/diamond/" target="_blank" rel="noopener" ' +
             'title="Tabela de vendas — Edifício Diamond">📊 <span>Tabela</span></a>' +
         '</header>' +
         '<div class="pagina" id="pagina"></div>' +
@@ -134,8 +138,14 @@ function pintarMenu(telaAtiva) {
   const html = secoes.filter((s) => s.itens.length).map((s) => {
     const itensHtml = s.itens.map((m) => {
       const n = m.bolha ? m.bolha() : 0;
-      return '<a href="#/' + m.rota + '" class="' + (m.rota === telaAtiva ? 'ativo' : '') + '">' +
+      // Item com `externo` abre outro sistema em nova aba (ex.: a tabela de
+      // vendas do Diamond) — não é rota daqui, então nunca fica "ativo".
+      const alvo = m.externo
+        ? '<a href="' + esc(m.externo) + '" target="_blank" rel="noopener" class="">'
+        : '<a href="#/' + m.rota + '" class="' + (m.rota === telaAtiva ? 'ativo' : '') + '">';
+      return alvo +
         '<span class="ic">' + m.icone + '</span>' + esc(typeof m.texto === 'function' ? m.texto() : m.texto) +
+        (m.externo ? '<span class="ic-ext">↗</span>' : '') +
         (n ? '<span class="bolha">' + n + '</span>' : '') + '</a>';
     }).join('');
     if (!s.nome) return itensHtml;

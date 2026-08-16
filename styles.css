@@ -109,6 +109,8 @@ p { margin: 0 0 .8em; }
   background: var(--dourado); color: #3a2a08; border-radius: 9px; text-decoration: none;
   font-weight: 700; font-size: .86rem; white-space: nowrap; }
 .atalho-tabela:hover { filter: brightness(1.06); }
+/* setinha de "abre em outra aba" nos itens externos do menu */
+.menu a .ic-ext { margin-left: 5px; font-size: .7rem; opacity: .55; }
 
 /* ── Cartões ───────────────────────────────────────────────────────────────── */
 .cartao { background: var(--papel); border: 1px solid var(--borda); border-radius: var(--raio); box-shadow: var(--sombra); padding: 18px; margin-bottom: 16px; }

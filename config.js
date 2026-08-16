@@ -16,4 +16,4 @@ const API = SUPABASE_URL + '/functions/v1/domo-nucleo';
 const API_ARQ = SUPABASE_URL + '/functions/v1/domo-acervo';
 
 // Versão exibida no rodapé (subir junto com o CACHE do sw.js a cada deploy).
-const VERSAO = 'v46';
+const VERSAO = 'v47';
