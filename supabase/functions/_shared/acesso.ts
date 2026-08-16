@@ -171,6 +171,21 @@ function semValores(o: any): any {
   return saida;
 }
 
+// Troca "R$ 45.000,00" por "R$ •••" dentro dos textos livres de uma lista de
+// eventos (histórico, diário). Cobre "R$ 1.234,56", "R$1234", "R$ 1,2 mil".
+const RE_DINHEIRO = /R\$\s?[\d][\d.,\s]*(mil|milh(ão|ões))?/gi;
+function mascararDinheiroNoTexto(lista: any): any {
+  if (!Array.isArray(lista)) return lista;
+  return lista.map((it) => {
+    if (!it || typeof it !== "object") return it;
+    const copia: any = { ...it };
+    for (const campo of ["o_que", "texto", "obs", "motivo", "descricao"]) {
+      if (typeof copia[campo] === "string") copia[campo] = copia[campo].replace(RE_DINHEIRO, "R$ •••");
+    }
+    return copia;
+  });
+}
+
 export function filtrarLeitura(quem: Quem | null, registros: any[]): any[] {
   const p = PERFIS[perfilDe(quem)];
   if (!p || p.tudo || !p.le) return registros;
@@ -181,6 +196,14 @@ export function filtrarLeitura(quem: Quem | null, registros: any[]): any[] {
       const limpo = semValores(r);
       delete limpo.medicoes;
       delete limpo.aditivos;
+      // O dinheiro também viaja em TEXTO LIVRE. semValores só apaga CHAVES
+      // conhecidas (preco/total/…), mas o histórico guarda o valor dentro da
+      // frase — "Medição 03 paga: R$ 45.000,00", "Contrato alterado: R$ X → R$ Y"
+      // — e a chave é 'o_que', que sobrevive. Sem isto, o celular da obra levava
+      // o valor do contrato e a folha inteira do empreiteiro para casa, em texto,
+      // no localStorage, mesmo depois de a direção desligar o acesso.
+      limpo.historico = mascararDinheiroNoTexto(limpo.historico);
+      limpo.diario = mascararDinheiroNoTexto(limpo.diario);
       return limpo;
     });
 }

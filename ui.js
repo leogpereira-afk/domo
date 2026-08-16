@@ -72,7 +72,13 @@ const fmt = {
   }
 };
 
-const hojeISO = () => new Date().toISOString().slice(0, 10);
+// Data de HOJE no fuso do APARELHO. toISOString() devolve UTC: das 21h à
+// meia-noite em MG (UTC-3) já é o dia seguinte lá, e o lembrete/férias nascia
+// datado de amanhã — e "hoje" no calendário caía na célula errada.
+const hojeISO = () => {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+};
 
 function diasAte(dataISO) {
   if (!dataISO) return null;

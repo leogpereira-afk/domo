@@ -133,6 +133,10 @@ async function gravar(col: string, registro: any, por: string): Promise<any> {
   // compra que o escritório tinha acabado de cancelar.
   const situacaoValida = (antigo && antigo.situacao) || novo.situacao;
   if (antigo && antigo.situacao === "cancelada") novo.situacao = "cancelada";
+  // Cotação que JÁ virou ordem não volta atrás: um aparelho com a cópia velha
+  // (sem ocId) apagava o vínculo ao gravar, e a trava de "uma cotação = uma
+  // ordem" ficava cega na próxima tentativa.
+  if (col === "cot" && antigo && antigo.ocId && !novo.ocId) novo.ocId = antigo.ocId;
   if (col === "oc" && Array.isArray(novo.recebimentos) && novo.recebimentos.length &&
       !["cancelada", "rascunho"].includes(situacaoValida)) {
     const recebidoDoItem = (itemId: string) => novo.recebimentos.reduce((s: number, r: any) => {
@@ -451,6 +455,24 @@ Deno.serve(async (req) => {
           if (COLECOES_SO_DIRECAO.has(it.colecao) && perfilDe(quem) !== "direcao") {
             recusados.push({ colecao: it.colecao, id: it.registro.id, motivo: "só a direção mexe no RH" });
             continue;
+          }
+          // UMA cotação vira UMA ordem de compra. O cliente confere isso no
+          // cache dele (cotacao.js), então dois aparelhos que abrem a mesma
+          // cotação respondida dentro da janela de sync passavam os dois e
+          // saíam DUAS ordens numeradas — material comprado em dobro. Aqui é o
+          // único lugar que enxerga o estado real.
+          if (it.colecao === "oc" && !atual && it.registro.cotacaoId) {
+            const cotacao = await lerUm("cot", String(it.registro.cotacaoId));
+            if (cotacao && cotacao.ocId && cotacao.ocId !== it.registro.id) {
+              const jaOC = await lerUm("oc", cotacao.ocId);
+              if (jaOC && !jaOC.apagadoEm) {
+                recusados.push({
+                  colecao: "oc", id: it.registro.id,
+                  motivo: "a cotação " + (cotacao.codigo || "") + " já virou a ordem " + (jaOC.codigo || cotacao.ocId),
+                });
+                continue;
+              }
+            }
           }
           // Repõe o que a obra não pode editar com o valor guardado ANTES de
           // julgar: senão a data de entrega velha do cache (ou os itens sem

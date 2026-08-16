@@ -116,11 +116,25 @@ function linhaComp(c, dir, mostraDono) {
 }
 
 // Liga os cliques comuns às linhas (abrir conversa, feito, editar, encaminhar).
+// Marca o elemento já ligado: a lista de "Concluídos" mora DENTRO do `el` (só
+// escondida), então ela já é ligada na primeira passada; ligar de novo ao abrir
+// punha um SEGUNDO ouvinte em cada botão — "Reabrir" disparava duas vezes e
+// voltava ao estado original, parecendo que o botão não funcionava.
 function ligarLinhasComp(el) {
-  el.querySelectorAll('[data-abrir]').forEach((b) => b.addEventListener('click', () => irPara('compromissos/' + b.dataset.abrir)));
-  el.querySelectorAll('[data-feito]').forEach((b) => b.addEventListener('click', () => alternarFeitoComp(b.dataset.feito)));
-  el.querySelectorAll('[data-editcomp]').forEach((b) => b.addEventListener('click', () => editarCompromisso(b.dataset.editcomp)));
-  el.querySelectorAll('[data-passar]').forEach((b) => b.addEventListener('click', () => encaminharCompromisso(b.dataset.passar)));
+  if (!el) return;
+  // Liga UMA vez por botão. A lista de "Concluídos" mora DENTRO do `el` (só
+  // escondida), então já é ligada na primeira passada; ligar de novo ao abrir
+  // punha um SEGUNDO ouvinte em cada botão — "Reabrir" disparava duas vezes,
+  // voltava ao estado original e parecia que o botão não funcionava.
+  const uma = (sel, fn) => el.querySelectorAll(sel).forEach((b) => {
+    if (b.dataset.ligado === '1') return;
+    b.dataset.ligado = '1';
+    b.addEventListener('click', () => fn(b));
+  });
+  uma('[data-abrir]', (b) => irPara('compromissos/' + b.dataset.abrir));
+  uma('[data-feito]', (b) => alternarFeitoComp(b.dataset.feito));
+  uma('[data-editcomp]', (b) => editarCompromisso(b.dataset.editcomp));
+  uma('[data-passar]', (b) => encaminharCompromisso(b.dataset.passar));
 }
 
 TELAS.compromissos = function (el, args) {
