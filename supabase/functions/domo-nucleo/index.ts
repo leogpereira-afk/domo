@@ -80,7 +80,9 @@ const CAMPOS_UNIAO = ["historico", "recebimentos", "cotacoes", "anexos", "medico
   "diario", "documentos", "equipe", "avaliacoes", "aditivos", "adiantamentos",
   "etapas", "responsaveis", "fornecedores",
   // RH (coleção 'pessoa'): cada lista da ficha se junta por id como as demais.
-  "pagamentos", "ferias", "asos"];
+  "pagamentos", "ferias", "asos",
+  // Permuta: as ordens aceitas e os lançamentos de cada lado.
+  "ordens", "lancamentos"];
 
 // Dentro de cada item unido, estas listas também se juntam em vez de se
 // sobrepor (as remessas e as entregas moram DENTRO da etapa; os preços moram

@@ -16,7 +16,8 @@ export const COLECOES = {
   prest: { pre: '',   nome: 'Prestador de serviço' },
   doc:   { pre: '',   nome: 'Documento' },
   proj:  { pre: '',   nome: 'Projeto' },
-  comp:  { pre: '',   nome: 'Compromisso' }
+  comp:  { pre: '',   nome: 'Compromisso' },
+  permuta: { pre: '', nome: 'Permuta' }
   // 'pessoa' (RH) é de PROPÓSITO só do Supabase: o backend Netlify legado (ainda
   // publicado até a virada) não conhece a coleção, então rejeita ler/gravar RH —
   // fecha o vazamento sem precisar portar o gate só-direção para cá.

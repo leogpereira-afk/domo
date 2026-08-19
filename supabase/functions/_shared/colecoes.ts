@@ -20,6 +20,7 @@ export const COLECOES: Record<string, { pre: string; nome: string }> = {
   // é carimbado pelo servidor (mandar dono no corpo não muda nada).
   comp:  { pre: "",   nome: "Compromisso" },
   pessoa: { pre: "",  nome: "Colaborador" },
+  permuta: { pre: "", nome: "Permuta" },
 };
 
 export const NOMES_COLECOES = Object.keys(COLECOES);

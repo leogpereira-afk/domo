@@ -15,5 +15,7 @@ export function arquivosDoRegistro(o: any): string[] {
   for (const d of (o.documentos || [])) if (d && d.arquivoId) ids.push(d.arquivoId);
   for (const a of (o.anexos || [])) if (a && a.arquivoId) ids.push(a.arquivoId);
   for (const a of (o.asos || [])) if (a && a.arquivoId) ids.push(a.arquivoId);
+  // A nota que sustenta um lançamento de permuta.
+  for (const l of (o.lancamentos || [])) if (l && l.anexo && l.anexo.arquivoId) ids.push(l.anexo.arquivoId);
   return Array.from(new Set(ids));
 }
