@@ -339,6 +339,32 @@ Deno.serve(async (req) => {
 
   const h = Object.fromEntries(req.headers);
   const token = h["x-token"] || body.token;
+
+  // A porta do backup central (hub Impresilk): as ações list/getCfg abrem
+  // SOMENTE com o token de rotina — segredo forte que nunca viaja no
+  // navegador. O token do bundle não serve aqui.
+  if (body.action === "list" || body.action === "getCfg") {
+    const ROTINA = Deno.env.get("ROTINA_TOKEN");
+    if (!ROTINA || token !== ROTINA) return json({ error: "Não autorizado" }, 401);
+    if (body.action === "getCfg") {
+      return json({ cfg: cfgSemSegredo(await lerCfgBruta()) });
+    }
+    // Tudo, paginado — lixeira inclusive: backup é retrato, não vitrine.
+    const de = Number(body.after) || 0;
+    const POR_PAGINA = 200;
+    const { data, error } = await db.from("domo_registros")
+      .select("colecao, id, registro, apagado")
+      .order("colecao").order("id")
+      .range(de, de + POR_PAGINA - 1);
+    if (error) return json({ error: error.message }, 500);
+    const registros = (data || []).map((l: any) =>
+      ({ _col: l.colecao, ...(l.apagado ? { _apagado: true } : {}), ...l.registro }));
+    return json({
+      registros,
+      nextAfter: (data || []).length < POR_PAGINA ? null : de + POR_PAGINA,
+    });
+  }
+
   const TOKEN = Deno.env.get("TOKEN");
   if (!TOKEN || token !== TOKEN) return json({ error: "Não autorizado" }, 401);
 
