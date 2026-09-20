@@ -71,7 +71,6 @@ const MENU = [
   { rota: 'permutas', icone: '🤝', texto: 'Permutas',
     bolha: () => (typeof permutas === 'function' ? permutas().filter((x) => !x.encerrada).length : 0) },
   { grupo: 'Diamond' },
-  { rota: 'vagas', icone: '▦', texto: 'Vagas de garagem' },
   { grupo: 'Acervo' },
   // A tabela de vendas do Diamond é OUTRO sistema (mesmo backend Supabase);
   // entra aqui como atalho, além do botão fixo no topo.
@@ -1518,3 +1517,5 @@ if (S.senhaHash) puxar();
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 }
+
+TELAS.vagas=el=>{cabecalho('Vagas de garagem','Gestão transferida para o Diamond');el.innerHTML='<div class="cartao"><h2>As vagas agora estão no Diamond</h2><p>Espelho, compradores, histórico e PDF reunidos no sistema de vendas.</p><a class="btn primario" href="https://leogpereira-afk.github.io/diamond/?v=19#/admin/vagas">Abrir vagas no Diamond →</a></div>';};
