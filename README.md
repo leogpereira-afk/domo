@@ -141,3 +141,17 @@ npx -y @netlify/mcp@latest --site-id f4c2d7c1-95e3-487e-aecc-d9d1413353ae --prox
    mas o sync troca os dados por baixo: releia com `achar()` na hora de salvar.
 10. **jsPDF:** só Helvetica. Registrar outra fonte sem registrar todos os estilos
    faz cair em Times sem avisar.
+
+
+## Espelho de vagas do Diamond (v49)
+
+A rota `#/vagas` reúne 82 vagas, nas posições da planta recebida: térreo V01–V25, segundo V26–V51, terceiro V52–V82. A base inicial cruza as abas Vagas de Garagem e Gestão de Vagas. Divergências ficam em Conferir, sem liberar uma vaga silenciosamente.
+
+- Direção e escritório acessam e registram decisões; obra não recebe esses dados.
+- Toda decisão guarda responsável, data e motivo. Atualizações concorrentes são recusadas por revisão atômica.
+- Consulta da base Domo a cada 20 segundos enquanto a tela está aberta. Não há sincronização contínua Google Sheets; nova importação usa os dois CSVs, com prévia e confirmação pela direção.
+- A importação preserva as decisões da Domo e reabre alerta quando a origem muda. Reserva vencida continua ocupada até decisão explícita.
+- PDF horizontal: três pavimentos, tabela de vínculos e páginas complementares com alertas e observações.
+- Dados pessoais residem exclusivamente em `domo_vagas_estado`, com RLS e acesso somente por `domo-vagas` após autenticação Domo. Nenhum dado da planilha vai para os arquivos públicos.
+- Publicar a migração `0003_vagas.sql` e a função `domo-vagas` antes do frontend. O arquivo `vagas-domain.js` é espelhado na pasta da função; as cópias devem ser idênticas.
+- Verificação: `node --test tests-vagas.cjs tests-vagas-api.cjs`.

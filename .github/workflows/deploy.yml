@@ -29,6 +29,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Validar espelho de vagas
+        run: |
+          node --test tests-vagas.cjs tests-vagas-api.cjs
+          cmp vagas-domain.js supabase/functions/domo-vagas/vagas-domain.js
+          node --check vagas.js
+          node --check vagas-pdf.js
+
       - name: Conferir que o backend não é mais o Netlify
         run: |
           if grep -q "netlify/functions" config.js; then
@@ -45,7 +56,7 @@ jobs:
       - name: Montar a pasta do site
         run: |
           mkdir -p _site
-          cp -r index.html styles.css *.js libs icons logo-*.png manifest.webmanifest _site/
+          cp -r index.html *.css *.js libs icons logo-*.png manifest.webmanifest _site/
           rm -f _site/sw.js.bak
           ls -la _site
 

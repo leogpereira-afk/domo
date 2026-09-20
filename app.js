@@ -19,7 +19,7 @@ const PERFIS_APP = {
       'configurações da empresa e não esvazia a lixeira.',
     telas: ['painel', 'solicitacoes', 'cotacoes', 'compras', 'recebimento', 'servicos',
       'cronogramas', 'acompanhamento', 'fornecedores', 'prestadores', 'projetos', 'documentos',
-      'compromissos', 'calendario', 'permutas', 'tabela-diamond', 'acessos', 'usuarios']
+      'compromissos', 'calendario', 'vagas', 'permutas', 'tabela-diamond', 'acessos', 'usuarios']
   },
   obra: {
     txt: 'Obra / almoxarifado',
@@ -70,6 +70,8 @@ const MENU = [
   // Permuta é troca com o parceiro: fica ao lado de quem são os parceiros.
   { rota: 'permutas', icone: '🤝', texto: 'Permutas',
     bolha: () => (typeof permutas === 'function' ? permutas().filter((x) => !x.encerrada).length : 0) },
+  { grupo: 'Diamond' },
+  { rota: 'vagas', icone: '▦', texto: 'Vagas de garagem' },
   { grupo: 'Acervo' },
   // A tabela de vendas do Diamond é OUTRO sistema (mesmo backend Supabase);
   // entra aqui como atalho, além do botão fixo no topo.
