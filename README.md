@@ -155,3 +155,6 @@ A rota `#/vagas` reúne 82 vagas, nas posições da planta recebida: térreo V01
 - Dados pessoais residem exclusivamente em `domo_vagas_estado`, com RLS e acesso somente por `domo-vagas` após autenticação Domo. Nenhum dado da planilha vai para os arquivos públicos.
 - Publicar a migração `0003_vagas.sql` e a função `domo-vagas` antes do frontend. O arquivo `vagas-domain.js` é espelhado na pasta da função; as cópias devem ser idênticas.
 - Verificação: `node --test tests-vagas.cjs tests-vagas-api.cjs`.
+
+### v50 — Diamond
+Identidade do módulo e PDF conforme o manual em SPE DOMO / Marketing (preto, branco, cinza #a8a8a8 e destaque #efff52). Logo reutilizada do acervo Diamond. Editor com rolagem apenas no conteúdo, cabeçalho e Salvar alterações sempre visíveis; mantém validação, revisão e histórico.
