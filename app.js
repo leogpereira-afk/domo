@@ -48,6 +48,11 @@ const irPara = (r) => { location.hash = '#/' + r; };
 const MENU = [
   { grupo: 'Obra' },
   { rota: 'painel', icone: '◧', texto: 'Painel' },
+  // A agenda vem logo depois do painel: quem abre o sistema quer saber o que é
+  // HOJE antes de saber o que falta comprar.
+  { rota: 'compromissos', icone: '🗓️', texto: 'Compromissos',
+    bolha: () => (typeof meusCompromissosUrgentes === 'function' ? meusCompromissosUrgentes() : 0) },
+  { rota: 'calendario', icone: '📆', texto: 'Calendário' },
   { rota: 'solicitacoes', icone: '📋', texto: 'Solicitações', bolha: () => lista('sc').filter((s) => s.situacao === 'nova').length },
   { rota: 'cotacoes', icone: '💵', texto: 'Cotações', bolha: () => lista('cot').filter((c) => c.situacao === 'aberta').length },
   { rota: 'compras', icone: '🧾', texto: 'Ordens de compra', bolha: () => lista('oc').filter((o) => ['emitida', ...SIT_ESPERANDO].includes(o.situacao)).length },
@@ -62,9 +67,6 @@ const MENU = [
           ((c.etapas || []).filter((e) => e && !e.apagadoEm && e.resposta && e.resposta.atende === false).length), 0)) },
   // Fornecedor de material e prestador de mão de obra são as duas metades da
   // mesma agenda — uma aba só, com as duas listas dentro.
-  { rota: 'compromissos', icone: '🗓️', texto: 'Compromissos',
-    bolha: () => (typeof meusCompromissosUrgentes === 'function' ? meusCompromissosUrgentes() : 0) },
-  { rota: 'calendario', icone: '📆', texto: 'Calendário' },
   { rota: 'fornecedores', icone: '🏢', texto: 'Fornecedores e prestadores',
     bolha: () => prestadoresComPendencia() },
   // Permuta é troca com o parceiro: fica ao lado de quem são os parceiros.
