@@ -413,16 +413,29 @@ async function enviarArquivo(file, onProgresso, cancelar) {
 }
 
 // Baixa juntando as partes no navegador e devolve um Blob.
+/* O laço de pedaços é o mesmo para o acervo e para o Drive: `pedir(i)` devolve
+   { dados (base64), partes, mime, nome }. Estava escrito duas vezes — e a cópia
+   do Drive tinha nascido sem a trava de download duplo e sem barra de progresso. */
+async function baixarEmPartes(pedir, onProgresso) {
+  const pedacos = [];
+  let i = 0, total = 1, meta = null;
+  while (i < total) {
+    const r = await pedir(i);
+    meta = meta || r;
+    total = Number(r.partes) || 1;
+    pedacos.push(base64ParaBytes(r.dados));
+    i++;
+    if (onProgresso) onProgresso(i / total);
+  }
+  return { blob: new Blob(pedacos, { type: (meta && meta.mime) || 'application/octet-stream' }), meta: meta || {} };
+}
+
 async function baixarArquivo(id, onProgresso) {
   const { meta } = await apiArq('meta', { id });
-  const pedacos = [];
-  const total = meta.partes || 1;
-  for (let i = 0; i < total; i++) {
+  return baixarEmPartes(async (i) => {
     const r = await apiArq('baixarParte', { id, i }, { prazoMs: 180000 });
-    pedacos.push(base64ParaBytes(r.dados));
-    if (onProgresso) onProgresso((i + 1) / total);
-  }
-  return { blob: new Blob(pedacos, { type: meta.mime || 'application/octet-stream' }), meta };
+    return Object.assign({}, r, { partes: meta.partes || 1, mime: meta.mime, nome: meta.nome });
+  }, onProgresso);
 }
 
 function salvarNoAparelho(blob, nome) {

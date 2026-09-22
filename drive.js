@@ -2,38 +2,45 @@
 
    O navegador NUNCA recebe crachá do Google: ele pede "lista essa pasta" e
    recebe só o que o servidor já conferiu estar dentro da pasta configurada
-   (ver supabase/functions/domo-drive). Por isso tudo aqui passa por apiDrive. */
+   (ver supabase/functions/domo-drive). Por isso tudo aqui passa por apiDrive.
+
+   A tela usa as peças que já existem no acervo — .arquivo-solto, iconeArquivo,
+   fmt.tamanho, baixar() — em vez de reescrevê-las: a primeira versão tinha uma
+   tabela de 4 colunas que não cabia no celular e um formatador que mostrava
+   2 GB como "2048.0 MB". */
 
 const API_DRIVE = SUPABASE_URL + '/functions/v1/domo-drive';
 const apiDrive = (action, dados = {}, opts = {}) =>
   api(action, dados, Object.assign({ url: API_DRIVE }, opts));
 
-/* Estado só desta tela: a pasta aberta e as migalhas do caminho. Não vai para o
-   cache do app — é uma janela para fora, não dado da obra. */
-const _drv = { pasta: '', caminho: [], itens: [], status: null, carregando: false, erro: '' };
+/* Estado só desta tela. A PASTA ABERTA mora no endereço (#/drive/<id>), não
+   aqui: o app redesenha a tela inteira a cada sincronização, e quem estivesse
+   três pastas adentro voltava para o começo sem ter clicado em nada. No
+   endereço, o botão Voltar do navegador também passa a funcionar. */
+const _drv = { itens: [], caminho: [], status: null, carregando: false, erro: '', busca: '', truncado: false, pasta: '' };
 
-const driveIcone = (it) => it.pasta ? '📁' : (
-  /image\//.test(it.tipo) ? '🖼️' :
-  /pdf/.test(it.tipo) ? '📕' :
-  /spreadsheet|excel|sheet/.test(it.tipo) ? '📊' :
-  /document|word/.test(it.tipo) ? '📄' :
-  /presentation|powerpoint/.test(it.tipo) ? '📽️' :
-  /zip|compressed/.test(it.tipo) ? '🗜️' :
-  /dwg|dxf|autocad/i.test(it.nome) ? '📐' : '📎');
+async function driveStatus(forcar) {
+  if (_drv.status && !forcar) return _drv.status;
+  try { _drv.status = await apiDrive('status'); }
+  catch (e) { _drv.erro = e.message || 'Não deu para falar com o servidor.'; }
+  return _drv.status;
+}
 
-const driveTamanho = (n) => !n ? '' :
-  n < 1024 ? n + ' B' :
-  n < 1048576 ? (n / 1024).toFixed(0) + ' KB' :
-  (n / 1048576).toFixed(1) + ' MB';
-
-async function driveAbrirPasta(id) {
+async function driveCarregar(idPasta) {
   _drv.carregando = true; _drv.erro = '';
   pintarDrive();
   try {
-    const r = await apiDrive('pasta', id ? { id } : {});
+    const r = _drv.busca
+      ? await apiDrive('buscar', { termo: _drv.busca })
+      : await apiDrive('pasta', idPasta ? { id: idPasta } : {});
     if (r.precisaAutorizar) { _drv.status = Object.assign({}, _drv.status, { conectado: false }); }
     else if (r.semRaiz) { _drv.status = Object.assign({}, _drv.status, { raiz: '' }); }
-    else { _drv.pasta = (r.caminho && r.caminho.length ? r.caminho[r.caminho.length - 1].id : '') || id || ''; _drv.itens = r.itens || []; _drv.caminho = r.caminho || []; }
+    else {
+      _drv.itens = r.itens || [];
+      _drv.caminho = r.caminho || [];
+      _drv.truncado = !!r.truncado;
+      _drv.pasta = idPasta || '';
+    }
   } catch (e) {
     _drv.erro = e.message || 'Não deu para abrir a pasta.';
   } finally {
@@ -42,35 +49,17 @@ async function driveAbrirPasta(id) {
   }
 }
 
-/* Baixa em pedaços, como o acervo faz com a planta de 40MB: o 4G da obra não
-   aguenta um arquivo inteiro numa resposta só. */
-async function driveBaixar(it) {
-  const fundo = abrirModal({
-    titulo: 'Baixando ' + it.nome,
-    corpo: '<div class="arquivo-solto"><span>0%</span></div>',
-    semFechar: true, acoes: []
+/* Usa o baixar() do acervo — a trava de download duplo e a barra de progresso
+   vêm junto. O `bilhete` é o que evita reconferir a árvore do Drive a cada
+   pedaço de 2 MB: o primeiro confere de verdade e devolve o comprovante. */
+function driveBaixar(it) {
+  let bilhete = '';
+  baixar(null, it.nome, async (i) => {
+    const r = await apiDrive('arquivo', { id: it.id, i, bilhete }, { prazoMs: 180000 });
+    if (r.precisaAutorizar) throw new Error('A conexão com o Google caiu. Avise a direção.');
+    if (r.bilhete) bilhete = r.bilhete;
+    return r;
   });
-  const marcador = fundo.querySelector('span');
-  try {
-    const pedacos = [];
-    let i = 0, total = 1, meta = null;
-    while (i < total) {
-      const r = await apiDrive('arquivo', { id: it.id, i }, { prazoMs: 180000 });
-      if (r.precisaAutorizar) throw new Error('A conexão com o Google caiu. Avise a direção.');
-      meta = meta || r;
-      total = r.partes || 1;
-      pedacos.push(base64ParaBytes(r.dados));
-      i++;
-      if (marcador) marcador.textContent = Math.round(i / total * 100) + '%';
-    }
-    fecharSilencioso(fundo);
-    salvarNoAparelho(new Blob(pedacos, { type: (meta && meta.mime) || 'application/octet-stream' }),
-      (meta && meta.nome) || it.nome);
-    toast('Baixado ✓');
-  } catch (e) {
-    fecharSilencioso(fundo);
-    toast(e.message || 'Não deu para baixar', 'ruim');
-  }
 }
 
 function driveConectar() {
@@ -80,7 +69,8 @@ function driveConectar() {
       'O sistema pede um acesso só: <b>ver e baixar</b>. Nunca apagar, mover ou renomear — ' +
       'e nada de Gmail ou agenda.</p>' +
       '<p class="dica">A autorização fica guardada no servidor. Quem abre a tela vê só a pasta ' +
-      'que a direção escolher, não o Drive inteiro.</p>',
+      'que a direção escolher, não o Drive inteiro. Quem conectou, quem trocou a pasta e quem ' +
+      'baixou cada arquivo fica registrado no histórico.</p>',
     acoes: [
       { texto: 'Cancelar', aoClicar: fecharModal },
       { texto: 'Ir para o Google', classe: 'primario', aoClicar: async (f) => {
@@ -114,7 +104,8 @@ function driveDefinirPasta() {
           if (r.precisaAutorizar) throw new Error('Conecte o Google primeiro.');
           fecharModal();
           toast('Pasta definida: ' + r.nomeRaiz);
-          await driveStatus(); await driveAbrirPasta('');
+          await driveStatus(true);
+          irPara('drive');
         } catch (e) {
           b.disabled = false; b.textContent = 'Salvar';
           toast(e.message || 'Não deu para salvar', 'ruim');
@@ -124,9 +115,15 @@ function driveDefinirPasta() {
   });
 }
 
-async function driveStatus() {
-  try { _drv.status = await apiDrive('status'); }
-  catch (e) { _drv.erro = e.message || 'Não deu para falar com o servidor.'; }
+/* Documento nativo do Google (Docs, Planilhas, Slides) não tem bytes — o Drive
+   devolve tamanho vazio. Mostrar "0 B" seria afirmar que o arquivo está vazio;
+   melhor dizer o que ele é, já que é assim que ele vai sair ao baixar. */
+const TIPOS_GOOGLE = { document: 'documento do Google · baixa em PDF', spreadsheet: 'planilha do Google · baixa em Excel',
+  presentation: 'apresentação do Google · baixa em PDF', drawing: 'desenho do Google · baixa em PDF', form: 'formulário do Google' };
+function driveMedida(it) {
+  const m = /application\/vnd\.google-apps\.([a-z]+)/.exec(it.tipo || '');
+  if (m) return TIPOS_GOOGLE[m[1]] || 'arquivo do Google';
+  return it.tamanho ? fmt.tamanho(it.tamanho) : 'tamanho não informado';
 }
 
 function pintarDrive() {
@@ -151,55 +148,77 @@ function pintarDrive() {
     corpo = '<div class="cartao">' + vazio('📁', 'Falta escolher a pasta',
       s.podeConectar ? 'Escolha qual pasta do Drive este sistema enxerga.'
         : 'A direção ainda não escolheu qual pasta aparece aqui.') + '</div>';
-  } else if (_drv.carregando && !_drv.itens.length) {
-    corpo = '<div class="cartao"><p class="dica">Abrindo a pasta…</p></div>';
   } else {
-    const migalhas = (_drv.caminho || []).map((c, i, a) =>
-      i === a.length - 1 ? '<b>' + esc(c.nome) + '</b>'
-        : '<a href="#" data-pasta="' + esc(c.id) + '">' + esc(c.nome) + '</a>').join(' <span>›</span> ');
+    const migalhas = _drv.busca
+      ? '<a href="#/drive">← voltar às pastas</a> <span>›</span> <b>' + esc(_drv.busca) + '</b>'
+      : (_drv.caminho || []).map((c, i, a) =>
+        i === a.length - 1 ? '<b>' + esc(c.nome) + '</b>'
+          : '<a href="#/drive' + (c.id === s.raiz ? '' : '/' + encodeURIComponent(c.id)) + '">' + esc(c.nome) + '</a>').join(' <span>›</span> ');
+
     const linhas = _drv.itens.map((it) =>
-      '<tr>' +
-        '<td>' + driveIcone(it) + ' ' + (it.pasta
-          ? '<a href="#" data-pasta="' + esc(it.id) + '"><b>' + esc(it.nome) + '</b></a>'
-          : esc(it.nome)) + '</td>' +
-        '<td class="num">' + esc(driveTamanho(it.tamanho)) + '</td>' +
-        '<td class="num">' + esc(it.em ? fmt.data(it.em.slice(0, 10)) : '') + '</td>' +
-        '<td class="num">' + (it.pasta ? '' :
-          '<button class="btn pequeno" data-baixar="' + esc(it.id) + '">Baixar</button>') + '</td>' +
-      '</tr>').join('');
+      '<div class="arquivo-solto">' +
+        '<span class="ic">' + iconeArquivo(it.nome, it.tipo) + '</span>' +
+        '<div style="flex:1;min-width:0">' +
+          '<div class="nome">' + (it.pasta
+            ? '<a href="#/drive/' + encodeURIComponent(it.id) + '">' + esc(it.nome) + '</a>'
+            : esc(it.nome)) + '</div>' +
+          '<div class="meta">' + (it.pasta ? 'pasta' : driveMedida(it)) +
+            (it.em ? ' · alterado ' + fmt.data(it.em.slice(0, 10)) : '') +
+            (it.caminho ? ' · em ' + esc(it.caminho) : '') + '</div>' +
+        '</div>' +
+        '<div class="acoes">' + (it.pasta
+          ? '<a class="btn pequeno" href="#/drive/' + encodeURIComponent(it.id) + '">Abrir</a>'
+          : '<button class="btn pequeno primario" data-baixar="' + esc(it.id) + '">Baixar</button>') + '</div>' +
+      '</div>').join('');
+
     corpo =
       '<div class="cartao">' +
         '<div class="migalhas">' + migalhas + '</div>' +
-        (_drv.itens.length
-          ? '<div class="tabela-rolagem"><table class="tabela"><thead><tr>' +
-            '<th>Nome</th><th class="num">Tamanho</th><th class="num">Alterado</th><th></th>' +
-            '</tr></thead><tbody>' + linhas + '</tbody></table></div>'
+        '<div class="filtros"><input id="drvBusca" type="search" placeholder="🔎 buscar arquivo em todas as pastas" value="' + esc(_drv.busca) + '"></div>' +
+        (_drv.carregando ? '<p class="dica">Consultando o Drive…</p>' : '') +
+        (_drv.itens.length ? linhas
+          : _drv.carregando ? ''
+          : _drv.busca ? vazio('🔎', 'Nada encontrado', 'Nenhum arquivo com esse nome dentro da pasta da Domo.')
           : vazio('📂', 'Pasta vazia', 'Não há nada dentro dela.')) +
+        // Falta tem de aparecer como falta: antes a lista parava em 200 e, pelo
+        // silêncio, afirmava que era tudo o que existia na pasta.
+        (_drv.truncado ? '<p class="dica">⚠️ Tem mais arquivos do que cabe nesta lista. Use a busca para achar o que procura.</p>' : '') +
       '</div>';
   }
-  document.getElementById('pagina').innerHTML = corpo;
+  el.innerHTML = corpo;
 
   const bt = (id, fn) => { const b = document.getElementById(id); if (b) b.onclick = fn; };
   bt('drvConectar', driveConectar);
   bt('drvPasta', driveDefinirPasta);
   bt('drvSair', async () => {
     if (!await confirmar('Desconectar o Google Drive? Os arquivos somem desta tela até alguém conectar de novo.')) return;
-    try { await apiDrive('desconectar'); toast('Desconectado'); await driveStatus(); pintarDrive(); }
+    try { await apiDrive('desconectar'); toast('Desconectado'); await driveStatus(true); pintarDrive(); }
     catch (e) { toast(e.message || 'Não deu para desconectar', 'ruim'); }
-  });
-  document.querySelectorAll('[data-pasta]').forEach((a) => a.onclick = (e) => {
-    e.preventDefault(); driveAbrirPasta(a.dataset.pasta);
   });
   document.querySelectorAll('[data-baixar]').forEach((b) => b.onclick = () => {
     const it = _drv.itens.find((x) => x.id === b.dataset.baixar);
     if (it) driveBaixar(it);
   });
+  const caixa = document.getElementById('drvBusca');
+  if (caixa) {
+    let t;
+    caixa.oninput = (e) => {
+      clearTimeout(t); const v = e.target.value.trim();
+      t = setTimeout(() => {
+        if (v === _drv.busca) return;
+        _drv.busca = v.length >= 2 ? v : '';
+        driveCarregar(_drv.busca ? '' : _drv.pasta).then(() => {
+          const c = document.getElementById('drvBusca');
+          if (c) { c.focus(); c.setSelectionRange(c.value.length, c.value.length); }
+        });
+      }, 400);
+    };
+  }
 }
 
-TELAS.drive = async function (el) {
+TELAS.drive = async function (el, args) {
+  const alvo = (args && args[0]) ? decodeURIComponent(args[0]) : '';
   cabecalho('Drive da Domo', 'Arquivos da empresa');
-  el.innerHTML = '<div class="cartao"><p class="dica">Consultando o Drive…</p></div>';
-  await driveStatus();
   // Erro na volta do Google chega pela barra de endereços — dizer qual foi, em
   // vez de mostrar uma tela vazia sem explicação.
   const erro = new URLSearchParams(location.search).get('drive_erro');
@@ -212,7 +231,11 @@ TELAS.drive = async function (el) {
     };
     toast(QUAL[erro] || ('O Google recusou (' + erro + ')'), 'ruim');
     history.replaceState(null, '', location.pathname + location.hash);
+    await driveStatus(true);
+  } else {
+    if (!_drv.status) el.innerHTML = '<div class="cartao"><p class="dica">Consultando o Drive…</p></div>';
+    await driveStatus();
   }
-  if (_drv.status && _drv.status.conectado && _drv.status.raiz) await driveAbrirPasta('');
+  if (_drv.status && _drv.status.conectado && _drv.status.raiz) await driveCarregar(alvo);
   else pintarDrive();
 };

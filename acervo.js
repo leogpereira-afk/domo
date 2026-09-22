@@ -3,7 +3,16 @@
    então planta em PDF de 40MB funciona igual a um arquivo pequeno. */
 
 const ICONES = { pdf: '📕', dwg: '📐', dxf: '📐', jpg: '🖼️', jpeg: '🖼️', png: '🖼️', doc: '📄', docx: '📄', xls: '📊', xlsx: '📊', zip: '🗜️', rar: '🗜️' };
-const iconeArquivo = (nome) => ICONES[String(nome || '').split('.').pop().toLowerCase()] || '📎';
+// Aceita o tipo (MIME) como segundo argumento: o acervo conhece o nome do
+// arquivo, o Drive conhece o tipo — e documento nativo do Google não tem extensão.
+const ICONES_MIME = [[/folder/, '📁'], [/image\//, '🖼️'], [/pdf/, '📕'], [/spreadsheet|excel|sheet/, '📊'],
+  [/document|word/, '📄'], [/presentation|powerpoint/, '📽️'], [/zip|compressed|rar/, '🗜️']];
+function iconeArquivo(nome, mime) {
+  const porNome = ICONES[String(nome || '').split('.').pop().toLowerCase()];
+  if (porNome) return porNome;
+  if (mime) { for (const [re, ic] of ICONES_MIME) if (re.test(mime)) return ic; }
+  return '📎';
+}
 
 /* Sobe um ou vários arquivos mostrando o progresso. Devolve os metadados. */
 async function subirArquivos(files, aoTerminarCada) {
@@ -53,7 +62,7 @@ async function subirArquivos(files, aoTerminarCada) {
 // Baixa mostrando barra de progresso: numa prancha de 40MB o usuário ficava
 // olhando uma tela parada e clicava de novo, começando um segundo download.
 let _baixando = false;
-async function baixar(arquivoId, nome) {
+async function baixar(arquivoId, nome, pedir) {
   if (_baixando) { toast('Já tem um download em andamento', 'ruim'); return; }
   _baixando = true;
   const fundo = abrirModal({
@@ -63,10 +72,10 @@ async function baixar(arquivoId, nome) {
     semFechar: true, acoes: []
   });
   try {
-    const { blob, meta } = await baixarArquivo(arquivoId, (p) => {
-      const b = document.getElementById('barraBaixa');
-      if (b) b.style.width = (p * 100) + '%';
-    });
+    // `pedir` = de onde vêm os pedaços. Sem ele, do acervo; com ele, de outra
+    // origem (o Drive) — a trava de download duplo e a barra valem para as duas.
+    const prog = (p) => { const b = document.getElementById('barraBaixa'); if (b) b.style.width = (p * 100) + '%'; };
+    const { blob, meta } = pedir ? await baixarEmPartes(pedir, prog) : await baixarArquivo(arquivoId, prog);
     fecharEste(fundo);
     salvarNoAparelho(blob, nome || meta.nome);
   } catch (e) {

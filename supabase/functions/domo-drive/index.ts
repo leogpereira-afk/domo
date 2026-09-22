@@ -29,7 +29,7 @@
 // ============================================================================
 import { json, preflight } from "../_shared/cors.ts";
 import { identificar, perfilDe } from "../_shared/acesso.ts";
-import { agora, lerUm, gravarUm, lerCfgBruta, tokenCurto } from "../_shared/dados.ts";
+import { agora, lerUm, gravarUm, lerCfgBruta, tokenCurto, registrarLog } from "../_shared/dados.ts";
 
 const COL = "_drive";
 const APP_URL = "https://leogpereira-afk.github.io/domo/";
@@ -114,18 +114,72 @@ async function meta(token: string, id: string): Promise<any | null> {
 /* A TRAVA que faz esta tela ser da OBRA e não do Drive inteiro: um id só passa
    se for a pasta raiz ou descendente dela. Sem isto, qualquer id copiado de
    outro lugar do Drive abriria por aqui — a pasta configurada viraria enfeite.
-   Sobe pelos `parents` até achar a raiz, com teto para não girar à toa. */
-async function dentroDaRaiz(token: string, id: string, raiz: string): Promise<boolean> {
-  if (!raiz) return false;
+   Sobe pelos `parents` até achar a raiz, com teto para não girar à toa.
+
+   Devolve o CAMINHO (raiz → alvo) ou null. Antes eram duas funções escalando a
+   mesma árvore na mesma requisição — uma para conferir, outra para montar as
+   migalhas. Quem tem o caminho já sabe que está dentro. */
+async function caminhoAteRaiz(token: string, id: string, raiz: string): Promise<{ id: string; nome: string }[] | null> {
+  if (!raiz || !id) return null;
+  const caminho: { id: string; nome: string }[] = [];
   let atual = id;
   for (let i = 0; i < TETO_SUBIDA; i++) {
-    if (atual === raiz) return true;
     const m = await meta(token, atual);
-    const pais: string[] = (m && m.parents) || [];
-    if (!pais.length) return false;
+    if (!m) return null;
+    caminho.unshift({ id: txt(m.id), nome: txt(m.name) });
+    if (atual === raiz) return caminho;
+    const pais: string[] = m.parents || [];
+    if (!pais.length) return null;
     atual = pais[0];
   }
-  return false;
+  return null;
+}
+
+/* Bilhete de download. Conferir a árvore a CADA pedaço de 2 MB fazia uma prancha
+   de 40 MB numa pasta funda gastar ~60 chamadas ao Google só para reconfirmar a
+   mesma resposta. O pedaço 0 confere de verdade e recebe este bilhete; os
+   seguintes o apresentam. É assinado com o segredo do servidor e vale 10 min,
+   então não dá para forjar nem guardar para amanhã. */
+async function assinar(id: string, exp: number): Promise<string> {
+  const segredo = txt(Deno.env.get("TOKEN")) + txt(Deno.env.get("SB_SECRET_KEY"));
+  const chave = await crypto.subtle.importKey("raw", new TextEncoder().encode(segredo),
+    { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const mac = await crypto.subtle.sign("HMAC", chave, new TextEncoder().encode(id + "|" + exp));
+  return exp + "." + Array.from(new Uint8Array(mac)).map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 32);
+}
+async function bilheteVale(id: string, bilhete: string): Promise<boolean> {
+  const [expTxt] = txt(bilhete).split(".");
+  const exp = Number(expTxt);
+  if (!Number.isFinite(exp) || exp < Date.now()) return false;
+  return bilhete === await assinar(id, exp);
+}
+
+/* Pagina de verdade. Antes pedia 200 e ignorava o nextPageToken: pasta de obra
+   com 300 fotos mostrava 200 e, pelo silêncio, afirmava que era só aquilo. Agora
+   vai até o teto e DIZ quando cortou — falta tem de aparecer como falta. */
+const POR_PAGINA = 200, TETO_ITENS = 1000;
+async function listar(token: string, q: string): Promise<{ itens: any[]; truncado: boolean }> {
+  const itens: any[] = [];
+  let pagina = "";
+  for (let i = 0; i < Math.ceil(TETO_ITENS / POR_PAGINA); i++) {
+    const u = "https://www.googleapis.com/drive/v3/files?q=" + encodeURIComponent(q) +
+      "&fields=" + encodeURIComponent("nextPageToken,files(" + CAMPOS + ")") +
+      "&orderBy=folder,name&pageSize=" + POR_PAGINA +
+      "&supportsAllDrives=true&includeItemsFromAllDrives=true" +
+      (pagina ? "&pageToken=" + encodeURIComponent(pagina) : "");
+    const r = await googleGet(token, u);
+    if (!r.ok) throw new Error("google " + r.status);
+    const d = await r.json();
+    for (const f of d.files || []) {
+      itens.push({
+        id: txt(f.id), nome: txt(f.name), tipo: txt(f.mimeType),
+        pasta: ehPasta(txt(f.mimeType)), tamanho: Number(f.size) || 0, em: txt(f.modifiedTime),
+      });
+    }
+    pagina = txt(d.nextPageToken);
+    if (!pagina || itens.length >= TETO_ITENS) break;
+  }
+  return { itens, truncado: !!pagina };
 }
 
 async function config() {
@@ -253,6 +307,7 @@ Deno.serve(async (req) => {
       u.searchParams.set("access_type", "offline");
       u.searchParams.set("prompt", "consent");
       u.searchParams.set("state", valor);
+      await registrarLog({ acao: "pediu autorização do Drive", por: quem });
       return json({ ok: true, url: u.toString(), callback: urlCallback() });
     }
 
@@ -260,6 +315,7 @@ Deno.serve(async (req) => {
       const nao = soDirecao(); if (nao) return nao;
       await gravar("refresh", { token: "", em: agora(), motivo: "desligado por " + quem });
       await gravar("token", { token: "", exp: "" });
+      await registrarLog({ acao: "desconectou o Drive", por: quem });
       return json({ ok: true });
     }
 
@@ -273,6 +329,7 @@ Deno.serve(async (req) => {
       if (!m) return json({ error: "Não achei essa pasta na conta conectada." }, 404);
       if (!ehPasta(txt(m.mimeType))) return json({ error: "Isso é um arquivo, não uma pasta." }, 400);
       await gravar("config", { raiz: id, nomeRaiz: txt(m.name), em: agora(), por: quem });
+      await registrarLog({ acao: "definiu a pasta do Drive", por: quem, pasta: txt(m.name) });
       return json({ ok: true, raiz: id, nomeRaiz: txt(m.name) });
     }
 
@@ -282,30 +339,33 @@ Deno.serve(async (req) => {
       const c = await config();
       if (!c.raiz) return json({ ok: true, semRaiz: true });
       const alvo = txt(body.id) || c.raiz;
-      if (alvo !== c.raiz && !await dentroDaRaiz(token, alvo, c.raiz)) {
-        return json({ error: "Essa pasta está fora da pasta da Domo.", semPermissao: true }, 403);
+      const caminho = await caminhoAteRaiz(token, alvo, c.raiz);
+      if (!caminho) return json({ error: "Essa pasta está fora da pasta da Domo.", semPermissao: true }, 403);
+      const { itens, truncado } = await listar(token, "'" + alvo.replace(/'/g, "\\'") + "' in parents and trashed = false");
+      return json({ ok: true, itens, caminho, raiz: c.raiz, truncado });
+    }
+
+    // Busca: "onde está o arquivo?" é a pergunta que esta tela existe para
+    // responder, e até aqui só dava para descer pasta por pasta. O Google devolve
+    // resultado do Drive INTEIRO, então cada achado é conferido contra a pasta da
+    // Domo antes de sair daqui — e volta com o caminho, para ninguém abrir um
+    // arquivo sem saber de onde ele veio.
+    if (acao === "buscar") {
+      const token = await tokenAcesso();
+      if (!token) return json({ ok: true, precisaAutorizar: true });
+      const c = await config();
+      if (!c.raiz) return json({ ok: true, semRaiz: true });
+      const termo = txt(body.termo).slice(0, 80);
+      if (termo.length < 2) return json({ error: "Escreva pelo menos duas letras." }, 400);
+      const escapado = termo.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+      const { itens, truncado } = await listar(token, "name contains '" + escapado + "' and trashed = false");
+      const dentro: any[] = [];
+      for (const it of itens) {
+        if (dentro.length >= 60) break;   // teto de viagens ao Google por busca
+        const caminho = await caminhoAteRaiz(token, it.id, c.raiz);
+        if (caminho) dentro.push({ ...it, caminho: caminho.slice(0, -1).map((x) => x.nome).join(" / ") });
       }
-      const q = encodeURIComponent("'" + alvo.replace(/'/g, "\\'") + "' in parents and trashed = false");
-      const r = await googleGet(token, "https://www.googleapis.com/drive/v3/files?q=" + q +
-        "&fields=" + encodeURIComponent("files(" + CAMPOS + ")") +
-        "&orderBy=folder,name&pageSize=200&supportsAllDrives=true&includeItemsFromAllDrives=true");
-      if (!r.ok) throw new Error("google " + r.status);
-      const d = await r.json();
-      const itens = (d.files || []).map((f: any) => ({
-        id: txt(f.id), nome: txt(f.name), tipo: txt(f.mimeType),
-        pasta: ehPasta(txt(f.mimeType)), tamanho: Number(f.size) || 0, em: txt(f.modifiedTime),
-      }));
-      // Caminho de volta até a raiz, para a tela ter migalhas sem adivinhar.
-      const caminho: { id: string; nome: string }[] = [];
-      let sobe = alvo;
-      for (let i = 0; i < TETO_SUBIDA && sobe; i++) {
-        const m = await meta(token, sobe);
-        if (!m) break;
-        caminho.unshift({ id: txt(m.id), nome: txt(m.name) });
-        if (sobe === c.raiz) break;
-        sobe = (m.parents || [])[0] || "";
-      }
-      return json({ ok: true, itens, caminho, raiz: c.raiz });
+      return json({ ok: true, itens: dentro, busca: termo, truncado: truncado || itens.length > 60 });
     }
 
     if (acao === "arquivo") {
@@ -314,8 +374,11 @@ Deno.serve(async (req) => {
       const c = await config();
       const id = txt(body.id);
       if (!id) return json({ error: "Sem arquivo" }, 400);
-      if (!await dentroDaRaiz(token, id, c.raiz)) {
-        return json({ error: "Esse arquivo está fora da pasta da Domo.", semPermissao: true }, 403);
+      const i0 = Math.max(0, Number(body.i) || 0);
+      if (i0 === 0 || !await bilheteVale(id, txt(body.bilhete))) {
+        if (!await caminhoAteRaiz(token, id, c.raiz)) {
+          return json({ error: "Esse arquivo está fora da pasta da Domo.", semPermissao: true }, 403);
+        }
       }
       const m = await meta(token, id);
       if (!m) return json({ error: "Arquivo não encontrado" }, 404);
@@ -336,7 +399,7 @@ Deno.serve(async (req) => {
         return json({ error: "Este tipo do Google não pode ser baixado (" + tipo.split(".").pop() + ")." }, 400);
       }
 
-      const i = Math.max(0, Number(body.i) || 0);
+      const i = i0;
       const alvoUrl = exp
         ? "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(id) + "/export?mimeType=" + encodeURIComponent(exp.mime)
         : "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(id) + "?alt=media&supportsAllDrives=true";
@@ -354,12 +417,16 @@ Deno.serve(async (req) => {
       let s = "";
       for (let k = 0; k < bytes.length; k += 8192) s += String.fromCharCode(...bytes.subarray(k, k + 8192));
       const total = exp ? bytes.length : Number(m.size) || bytes.length;
+      if (i === 0) {
+        await registrarLog({ acao: "baixou do Drive", por: quem, arquivo: txt(m.name), id, tamanho: total });
+      }
       return json({
         ok: true, dados: btoa(s), i,
         partes: exp ? 1 : Math.max(1, Math.ceil(total / PARTE)),
         nome: txt(m.name) + (exp ? exp.ext : ""),
         mime: exp ? exp.mime : (tipo || "application/octet-stream"),
         tamanho: total,
+        bilhete: await assinar(id, Date.now() + 10 * 60 * 1000),
       });
     }
 
