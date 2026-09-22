@@ -19,7 +19,7 @@ const S = {
   senhaHash: '',
   // Quem entrou: perfil manda no menu e nos botões. A porta de verdade é o
   // servidor — isto aqui só evita mostrar o que a pessoa não pode fazer.
-  perfil: 'direcao',
+  perfil: 'obra',   // o mais fechado até o servidor dizer quem é (ver app.js:perfilAtual)
   usuarioId: '',
   acessoProprio: false,
   seqFila: 0,
@@ -105,7 +105,7 @@ function lerCache() {
   if (faltando) { try { localStorage.setItem(K.fila, JSON.stringify(S.fila)); } catch { /* segue */ } }
   S.quem = localStorage.getItem(K.quem) || '';
   S.senhaHash = localStorage.getItem(K.senha) || '';
-  S.perfil = localStorage.getItem(K.perfil) || 'direcao';
+  S.perfil = localStorage.getItem(K.perfil) || 'obra';   // recusa por omissão; o snapshot corrige em segundos
   S.usuarioId = localStorage.getItem(K.usuario) || '';
   S.acessoProprio = !!S.usuarioId;
   // Se o cache tiver se perdido (memória cheia), a fila reconstrói o que ainda

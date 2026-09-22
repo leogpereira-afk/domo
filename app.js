@@ -29,7 +29,11 @@ const PERFIS_APP = {
   }
 };
 
-const perfilAtual = () => PERFIS_APP[S.perfil] ? S.perfil : 'direcao';
+// Perfil desconhecido vira OBRA, o mais fechado — nunca direção. Mapa que
+// libera quando esquece é defeito, e aqui o esquecimento dava a barra inteira
+// da direção. O servidor recusa do mesmo jeito (acesso.ts: perfilDe → 'obra'),
+// e o snapshot devolve o perfil certo a cada sync, então isso se corrige só.
+const perfilAtual = () => PERFIS_APP[S.perfil] ? S.perfil : 'obra';
 const ehDirecao = () => perfilAtual() === 'direcao';
 function podeVer(rota) {
   const p = PERFIS_APP[perfilAtual()];
@@ -46,17 +50,23 @@ const irPara = (r) => { location.hash = '#/' + r; };
 
 /* ── Menu ──────────────────────────────────────────────────────────────────── */
 const MENU = [
-  { grupo: 'Obra' },
+  // Sem título de grupo: cai na seção anônima que pintarMenu monta primeiro.
+  // É o "o que é hoje" — não é etapa do fluxo, e ninguém recolhe sem querer.
   { rota: 'painel', icone: '◧', texto: 'Painel' },
   // A agenda vem logo depois do painel: quem abre o sistema quer saber o que é
   // HOJE antes de saber o que falta comprar.
   { rota: 'compromissos', icone: '🗓️', texto: 'Compromissos',
     bolha: () => (typeof meusCompromissosUrgentes === 'function' ? meusCompromissosUrgentes() : 0) },
   { rota: 'calendario', icone: '📆', texto: 'Calendário' },
+
+  // Os grupos seguem o caminho de uma peça, na ordem em que ela anda pela obra.
+  { grupo: 'Material' },
   { rota: 'solicitacoes', icone: '📋', texto: 'Solicitações', bolha: () => lista('sc').filter((s) => s.situacao === 'nova').length },
   { rota: 'cotacoes', icone: '💵', texto: 'Cotações', bolha: () => lista('cot').filter((c) => c.situacao === 'aberta').length },
   { rota: 'compras', icone: '🧾', texto: 'Ordens de compra', bolha: () => lista('oc').filter((o) => ['emitida', ...SIT_ESPERANDO].includes(o.situacao)).length },
   { rota: 'recebimento', icone: '📦', texto: 'Recebimento', bolha: () => lista('oc').filter((o) => SIT_ESPERANDO.includes(o.situacao)).length },
+
+  { grupo: 'Execução' },
   { rota: 'servicos', icone: '🛠️', texto: 'Ordens de serviço' },
   // Cronograma e acompanhamento de fornecedor são a mesma coisa vista de dois
   // ângulos — vivem numa aba só, com as duas visões lá dentro.
@@ -65,35 +75,45 @@ const MENU = [
       ? paraAcompanhar().filter((x) => x.peso <= 1).length
       : lista('crono').reduce((n, c) => n +
           ((c.etapas || []).filter((e) => e && !e.apagadoEm && e.resposta && e.resposta.atende === false).length), 0)) },
+
+  { grupo: 'Parceiros' },
   // Fornecedor de material e prestador de mão de obra são as duas metades da
   // mesma agenda — uma aba só, com as duas listas dentro.
   { rota: 'fornecedores', icone: '🏢', texto: 'Fornecedores e prestadores',
     bolha: () => prestadoresComPendencia() },
   // Permuta é troca com o parceiro: fica ao lado de quem são os parceiros.
+  // A bolha conta o que PRECISA de alguém: permuta com entrega lançada de um
+  // lado só. Contar "permuta aberta" enchia o menu de um número que não era
+  // pendência nenhuma — permuta saudável fica aberta por anos.
   { rota: 'permutas', icone: '🤝', texto: 'Permutas',
-    bolha: () => (typeof permutas === 'function' ? permutas().filter((x) => !x.encerrada).length : 0) },
-  { grupo: 'Acervo' },
-  // A tabela de vendas do Diamond é OUTRO sistema (mesmo backend Supabase);
-  // entra aqui como atalho, além do botão fixo no topo.
-  { rota: 'tabela-diamond', icone: '📊', texto: 'Tabela de vendas',
-    externo: 'https://leogpereira-afk.github.io/diamond/' },
+    bolha: () => ((typeof permutas === 'function' && typeof totaisDasPermutas === 'function' && typeof resumoDaPermuta === 'function')
+      ? totaisDasPermutas(permutas().map((p) => Object.assign({}, p, resumoDaPermuta(p)))).semEntrega
+      : 0) },
+  // Entregar o link ao fornecedor é trabalho com parceiro, não administração do
+  // sistema — por isso saiu de "Sistema".
+  { rota: 'acessos', icone: '🔑', texto: 'Links para fornecedor' },
+
+  { grupo: 'Arquivos' },
   { rota: 'projetos', icone: '📐', texto: 'Projetos' },
   { rota: 'documentos', icone: '🗂️', texto: 'Documentos', bolha: () => docsVencendo(30).length },
   // A pasta da empresa no Google Drive, lida de dentro do sistema. Fica ao lado
   // de Projetos e Documentos porque é a mesma pergunta: 'onde está o arquivo?'.
   { rota: 'drive', icone: '📁', texto: 'Drive da Domo' },
+
   // RH resumido — só a direção vê (não está nas telas de escritório/obra, então
   // podeVer esconde do menu e o roteador barra por hash).
   { grupo: 'Pessoas' },
   { rota: 'pessoas', icone: '👥', texto: 'Colaboradores',
     bolha: () => (typeof asosVencendo === 'function' ? asosVencendo(30).length : 0) },
+
   { grupo: 'Sistema' },
   // Para a direção é a tela de criar acesso; para os outros, só a própria senha.
-  { rota: 'usuarios', icone: '👤', texto: () => ehDirecao() ? 'Acessos da equipe' : 'Minha senha',
-    bolha: () => ehDirecao() ? ((S.cfg && S.cfg.usuarios) || []).filter((u) => u.ativo !== false).length : 0 },
-  { rota: 'acessos', icone: '🔑', texto: 'Links para fornecedor' },
+  // SEM bolha: ela contava o tamanho da equipe, e um número dourado aqui lê como
+  // "tem 18 coisas esperando você" — não tem nada esperando ninguém.
+  { rota: 'usuarios', icone: '👤', texto: () => ehDirecao() ? 'Acessos da equipe' : 'Minha senha' },
   { rota: 'config', icone: '⚙️', texto: 'Configurações' }
 ];
+
 
 /* ── Casca ─────────────────────────────────────────────────────────────────── */
 function montarShell() {
@@ -114,7 +134,7 @@ function montarShell() {
           '<div class="dir" id="acoesTopo"></div>' +
           // Atalho FIXO (fora do #acoesTopo, que cada tela reescreve): a tabela
           // de vendas do Edifício Diamond, sempre à mão no canto direito.
-          '<a class="atalho-tabela" href="https://leogpereira-afk.github.io/diamond/" target="_blank" rel="noopener" ' +
+          '<a class="atalho-tabela" id="atalhoTabela" hidden href="https://leogpereira-afk.github.io/diamond/" target="_blank" rel="noopener" ' +
             'title="Tabela de vendas — Edifício Diamond">📊 <span>Tabela</span></a>' +
         '</header>' +
         '<div class="pagina" id="pagina"></div>' +
@@ -133,6 +153,13 @@ try { gruposRecolhidos = new Set(JSON.parse(localStorage.getItem(K.gruposMenu) |
 
 function pintarMenu(telaAtiva) {
   const visivel = MENU.filter((m) => m.grupo || podeVer(m.rota));
+  // O atalho do Diamond é a ÚNICA porta para a tabela agora que o item saiu do
+  // menu — e era a única que nunca conferia perfil. Aqui, que roda junto com o
+  // perfil, ela passa pela mesma régua das outras.
+  { const at = document.getElementById('atalhoTabela'); if (at) at.hidden = !podeVer('tabela-diamond'); }
+  // Grupo renomeado deixava o nome velho guardado para sempre; limpa na leitura.
+  { const nomes = new Set(MENU.filter((m) => m.grupo).map((m) => m.grupo));
+    for (const g of [...gruposRecolhidos]) if (!nomes.has(g)) gruposRecolhidos.delete(g); }
   // Quebra o menu em seções: cada item entra sob o último título de grupo.
   const secoes = [];
   let atual = null;
@@ -235,7 +262,7 @@ async function sair() {
     localStorage.removeItem(K.cache);
     localStorage.removeItem(K.fila);
   } catch { /* modo privado */ }
-  S.senhaHash = ''; S.perfil = 'direcao'; S.usuarioId = ''; S.acessoProprio = false;
+  S.senhaHash = ''; S.perfil = 'obra'; S.usuarioId = ''; S.acessoProprio = false;
   S.reg = regVazio(); S.fila = []; S.cfg = null;
   location.hash = '#/painel';
   render();
@@ -376,7 +403,7 @@ function telaEntrar() {
         }
         S.usuarioId = ''; S.acessoProprio = false;
       }
-      S.perfil = r.perfil || 'direcao';
+      S.perfil = r.perfil || 'obra';
       localStorage.setItem(K.senha, hash);
       localStorage.setItem(K.quem, S.quem);
       localStorage.setItem(K.perfil, S.perfil);
