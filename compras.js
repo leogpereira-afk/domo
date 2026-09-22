@@ -422,6 +422,7 @@ function telaSolicitacao(el, id) {
   const bap = document.getElementById('apagarSC');
   if (bap) bap.addEventListener('click', async () => {
     if (await confirmar('Apagar esta solicitação? Ela vai para a lixeira.', { perigo: true, ok: 'Apagar' })) {
+      if (semInternetParaApagar()) return;
       try { await api('apagar', { colecao: 'sc', id: s.id }); } catch (e) { toast('Não consegui apagar: ' + e.message, 'ruim'); return; }
       await puxar(); irPara('solicitacoes');
     }
@@ -898,6 +899,7 @@ function telaOC(el, id) {
   el.querySelectorAll('[data-escolher]').forEach((b) => b.addEventListener('click', () => escolherCotacao(o, b.dataset.escolher)));
   document.getElementById('apagarOC').addEventListener('click', async () => {
     if (await confirmar('Apagar esta ordem de compra? Vai para a lixeira.', { perigo: true, ok: 'Apagar' })) {
+      if (semInternetParaApagar()) return;
       try { await api('apagar', { colecao: 'oc', id: o.id }); } catch (e) { toast('Não consegui apagar: ' + e.message, 'ruim'); return; }
       await puxar();
       // A solicitação não pode ficar "em compra" sem compra nenhuma.
@@ -1528,6 +1530,7 @@ function editarFornecedor(id) {
     acoes: [
       (id ? { texto: 'Apagar', classe: 'perigo', aoClicar: async () => {
         if (await confirmar('Apagar este fornecedor?', { perigo: true, ok: 'Apagar' })) {
+          if (semInternetParaApagar()) return;
           try { await api('apagar', { colecao: 'forn', id }); } catch (e) { toast('Não consegui apagar: ' + e.message, 'ruim'); return; }
           await puxar(); fecharModal(); render();
         }

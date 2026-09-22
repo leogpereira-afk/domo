@@ -89,6 +89,16 @@ async function api(action, dados = {}, opts = {}) {
 
 const apiArq = (action, dados = {}, opts = {}) => api(action, dados, Object.assign({ url: API_ARQ }, opts));
 
+/* Apagar é a ÚNICA operação que vai direto ao servidor, sem passar pela fila
+   offline — então é a única que pode estourar na cara de quem está no canteiro.
+   Sem sinal, a mensagem do navegador é 'Failed to fetch'. Dois dos dez pontos
+   que apagam lembravam de avisar; os outros oito não. A frase mora aqui. */
+function semInternetParaApagar() {
+  if (navigator.onLine) return false;
+  toast('Sem internet agora — tente quando conectar', 'ruim');
+  return true;
+}
+
 /* ── Cache local ───────────────────────────────────────────────────────────── */
 function lerCache() {
   try {

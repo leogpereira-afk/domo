@@ -579,7 +579,7 @@ function editarPermuta(id) {
         fecharModal();
         if (!await confirmar('Apagar a permuta "' + (p.nome || '') + '"? Vai para a lixeira — a direção pode restaurar.',
           { perigo: true, ok: 'Apagar' })) return;
-        if (!navigator.onLine) { toast('Sem internet agora — tente quando conectar', 'ruim'); return; }
+        if (semInternetParaApagar()) return;
         try { await api('apagar', { colecao: 'permuta', id }); }
         catch (e) { toast('Não consegui apagar: ' + e.message, 'ruim'); return; }
         await puxar(); irPara('permutas');

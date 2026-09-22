@@ -259,6 +259,7 @@ function menuProjeto(id) {
       ((typeof podeEscrever === 'function' && !podeEscrever('proj')) ? null :
       { texto: 'Apagar', classe: 'perigo', aoClicar: async () => {
         if (!await confirmar('Apagar este projeto? Vai para a lixeira.', { perigo: true, ok: 'Apagar' })) return;
+        if (semInternetParaApagar()) return;
         try { await api('apagar', { colecao: 'proj', id: p.id }); } catch (e) { toast('Não consegui apagar: ' + e.message, 'ruim'); return; }
         await puxar(); fecharModal(); render();
       } }),
@@ -382,6 +383,7 @@ function editarDocumento(id, arquivo) {
     acoes: [
       (id ? { texto: 'Apagar', classe: 'perigo', aoClicar: async () => {
         if (!await confirmar('Apagar este documento?', { perigo: true, ok: 'Apagar' })) return;
+        if (semInternetParaApagar()) return;
         try { await api('apagar', { colecao: 'doc', id }); } catch (e) { toast('Não consegui apagar: ' + e.message, 'ruim'); return; }
         await puxar(); fecharModal(); render();
       } } : null),

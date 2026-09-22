@@ -142,6 +142,16 @@ function montarShell() {
     '</div>';
 
   document.getElementById('btnMenu').addEventListener('click', () => document.body.classList.toggle('menu-aberto'));
+  // Fechar a gaveta. No celular ela abre um véu em tela cheia que cobre TUDO —
+  // inclusive o ☰ que a abriu — e nada fechava esse véu: quem abria o menu na
+  // obra e mudava de ideia só escapava navegando para outra tela. O véu é um
+  // ::after do body, então o toque nele chega com target = body.
+  document.body.addEventListener('click', (e) => {
+    if (e.target === document.body) document.body.classList.remove('menu-aberto');
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') document.body.classList.remove('menu-aberto');
+  });
   document.getElementById('menu').addEventListener('click', (e) => {
     if (e.target.closest('a')) document.body.classList.remove('menu-aberto');
   });

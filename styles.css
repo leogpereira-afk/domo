@@ -408,6 +408,9 @@ tfoot td { font-weight: 700; border-top: 2px solid var(--borda); border-bottom: 
   .lateral { transform: translateX(-100%); transition: transform .22s ease; box-shadow: 0 0 40px rgba(0,0,0,.3); }
   body.menu-aberto .lateral { transform: none; }
   body.menu-aberto::after { content: ''; position: fixed; inset: 0; background: rgba(15,23,42,.45); z-index: 35; }
+  /* O cabeçalho tem z-index 30 e ficava DEBAixo do véu — o ☰ que abre a gaveta
+     não podia fechá-la. Acima do véu (35) e abaixo da gaveta (.lateral, 40). */
+  body.menu-aberto .topo { z-index: 36; }
   .conteudo { margin-left: 0; }
   .hamburguer { display: block; }
   .pagina { padding: 16px 14px 70px; }

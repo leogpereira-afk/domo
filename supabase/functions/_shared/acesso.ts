@@ -34,7 +34,10 @@ export const PERFIS: Record<string, {
     // 'prest' fica de fora: a pasta do prestador tem CPF, ASO e ficha de
     // terceiros, e quem é da obra não abre essa tela.
     le: ["sc", "oc", "os", "crono", "forn", "doc", "proj", "comp"],
-    semPreco: ["oc", "os", "cot"],
+    // 'forn' entra aqui não por preço, mas porque o cadastro carrega conta
+    // bancária, condição comercial e CNPJ — e a obra lê 'forn' para saber o NOME
+    // do fornecedor na ordem e no cronograma. O nome sobrevive à régua.
+    semPreco: ["oc", "os", "cot", "forn"],
   },
 };
 
@@ -144,6 +147,18 @@ export function reporProtegidos(quem: Quem | null, colecao: string, registro: an
     if (permitidos.includes(k) || k === "id") continue;
     if (!(k in atual)) delete saida[k];
   }
+  /* O HISTÓRICO É CONVERSA: a obra acrescenta, nunca reescreve.
+     Sem isto, o defeito era silencioso e definitivo: o servidor entrega a OC à
+     obra com o dinheiro mascarado dentro do texto ("Medição paga: R$ •••"); ao
+     registrar um recebimento o celular devolve esse mesmo texto; e o servidor,
+     que junta item a item pelo id, deixa a versão do cliente vencer. O valor
+     real sumia do banco para TODO mundo, inclusive para a direção, sem erro
+     nenhum. A trava já existia para a agenda ('comp', prepararComp) — faltava
+     aqui. Entrada que já existe volta ao que está guardado; entrada nova passa. */
+  const antigas = new Map(((atual && atual.historico) || []).map((h: any) => [h && h.id, h]));
+  if (Array.isArray(saida.historico) && antigas.size) {
+    saida.historico = saida.historico.map((h: any) => (h && antigas.has(h.id)) ? antigas.get(h.id) : h);
+  }
   return saida;
 }
 
@@ -158,14 +173,27 @@ export function podeFazer(quem: Quem | null, action: string): boolean {
 
 /* ── Leitura: o celular da obra não leva preço para casa ───────────────────── */
 const CAMPOS_VALOR = ["preco", "total", "totalLiquido", "totalBruto", "desconto", "frete",
-  "valor", "liquido", "bruto", "retencao", "adiantamento", "condicaoPagamento", "banco"];
+  "valor", "liquido", "bruto", "retencao", "adiantamento", "condicaoPagamento", "banco",
+  // Estes quatro o app grava hoje e a lista não conhecia: 'dadosBancarios' é a
+  // conta do fornecedor DENTRO da ordem (a lista só tinha 'banco', que é o campo
+  // do cadastro), 'seguro' entra na conta do líquido, e condição/forma de
+  // pagamento são o acerto comercial. Iam inteiros para o celular da obra.
+  "seguro", "dadosBancarios", "condicao", "formaPagamento"];
+
+/* Documento de pessoa não é preço, e por isso escapava da régua acima: a OS
+   copia o CPF/CNPJ do prestador para dentro dela (servicos.js: empreiteiro.cnpjCpf)
+   e a obra lê 'os'. O comentário de PERFIS já dizia a intenção — "a pasta do
+   prestador tem CPF (…) e quem é da obra não abre essa tela" — mas o documento
+   entrava pela porta de trás. O NOME fica: a tela de cronograma da obra precisa
+   dele para dizer quem é o responsável. */
+const CAMPOS_PESSOAIS = ["cpf", "cnpjCpf", "cnpj", "rg", "pis"];
 
 function semValores(o: any): any {
   if (Array.isArray(o)) return o.map(semValores);
   if (!o || typeof o !== "object") return o;
   const saida: any = {};
   for (const [k, v] of Object.entries(o)) {
-    if (CAMPOS_VALOR.includes(k)) continue;
+    if (CAMPOS_VALOR.includes(k) || CAMPOS_PESSOAIS.includes(k)) continue;
     saida[k] = semValores(v);
   }
   return saida;

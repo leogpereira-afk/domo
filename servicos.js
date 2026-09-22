@@ -614,6 +614,7 @@ function telaOS(el, id) {
   });
   document.getElementById('apagarOS').addEventListener('click', async () => {
     if (await confirmar('Apagar esta ordem de serviço?', { perigo: true, ok: 'Apagar' })) {
+      if (semInternetParaApagar()) return;
       try { await api('apagar', { colecao: 'os', id: o.id }); } catch (e) { toast('Não consegui apagar: ' + e.message, 'ruim'); return; }
       await puxar(); irPara('servicos');
     }
@@ -1415,9 +1416,9 @@ function telaPrestador(el, id) {
 
   document.getElementById('pEditar').addEventListener('click', () => editarPrestador(p.id));
   document.getElementById('pNovoDoc').addEventListener('click', () => editarDocPrestador(p, null));
-  document.getElementById('pNovaPessoa').addEventListener('click', () => editarPessoa(p, null));
+  document.getElementById('pNovaPessoa').addEventListener('click', () => editarPessoaDaEquipe(p, null));
   el.querySelectorAll('[data-pdoc]').forEach((b) => b.addEventListener('click', () => editarDocPrestador(p, b.dataset.pdoc)));
-  el.querySelectorAll('[data-ppessoa]').forEach((b) => b.addEventListener('click', () => editarPessoa(p, b.dataset.ppessoa)));
+  el.querySelectorAll('[data-ppessoa]').forEach((b) => b.addEventListener('click', () => editarPessoaDaEquipe(p, b.dataset.ppessoa)));
   el.querySelectorAll('[data-veros]').forEach((b) => b.addEventListener('click', () => irPara('servicos/' + b.dataset.veros)));
   el.querySelectorAll('[data-pbaixar]').forEach((b) => b.addEventListener('click', () => {
     const d = (p.documentos || []).find((x) => x.id === b.dataset.pbaixar);
@@ -1428,6 +1429,7 @@ function telaPrestador(el, id) {
     'Olá ' + (p.contato || p.nome) + ', aqui é da ' + ((S.cfg.empresa || {}).nomeCurto || 'Domo Construtora') + '.'), '_blank'));
   document.getElementById('pApagar').addEventListener('click', async () => {
     if (!await confirmar('Apagar ' + p.nome + '? As ordens de serviço dele continuam.', { perigo: true, ok: 'Apagar' })) return;
+    if (semInternetParaApagar()) return;
     try { await api('apagar', { colecao: 'prest', id: p.id }); } catch (e) { toast('Não consegui apagar: ' + e.message, 'ruim'); return; }
     await puxar(); irPara('prestadores');
   });
@@ -1537,7 +1539,11 @@ function editarDocPrestador(p, docId) {
   });
 }
 
-function editarPessoa(p, pessoaId) {
+// Nome próprio: existe um editarPessoa(id) no rh.js (o colaborador da Domo) e o
+// index.html carrega rh.js DEPOIS deste arquivo — os dois dividem o mesmo escopo,
+// então o do RH vencia e estes botões abriam a ficha de RH com um objeto no lugar
+// do id, gravando lixo na coleção só-direção. Guarda em verificar-regras.cjs.
+function editarPessoaDaEquipe(p, pessoaId) {
   const pes = pessoaId ? (p.equipe || []).find((x) => x.id === pessoaId) || {} : {};
   const treinos = pes.treinamentos || [];
   abrirModal({

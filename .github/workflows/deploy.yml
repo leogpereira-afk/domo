@@ -40,7 +40,7 @@ jobs:
       # offline, mais a sintaxe de cada arquivo que vai para o ar.
       - name: Conferir versões, pacote offline e sintaxe
         run: |
-          node --test verificar-versoes.cjs
+          node --test verificar-versoes.cjs verificar-regras.cjs
           for f in *.js; do node --check "$f"; done
 
       - name: Conferir que o backend não é mais o Netlify

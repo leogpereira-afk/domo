@@ -404,7 +404,7 @@ function telaCotacao(el, id) {
       { perigo: true, ok: 'Excluir' })) return;
     // 'apagar' vai direto ao servidor (não passa pela fila offline): sem sinal,
     // avisa em vez de estourar um "Failed to fetch" técnico na obra.
-    if (!navigator.onLine) { toast('Sem internet agora — tente quando conectar', 'ruim'); return; }
+    if (semInternetParaApagar()) return;
     try { await api('apagar', { colecao: 'cot', id: c.id }); }
     catch (e) { toast('Não consegui excluir: ' + e.message, 'ruim'); return; }
     await puxar();

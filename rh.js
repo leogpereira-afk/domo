@@ -241,6 +241,7 @@ function telaPessoa(el, id) {
   document.getElementById('apagarPessoa').addEventListener('click', async () => {
     if (!await confirmar('Apagar ' + (p.nome || 'este colaborador') + '? Vai para a lixeira — a direção pode restaurar.',
       { perigo: true, ok: 'Apagar' })) return;
+    if (semInternetParaApagar()) return;
     try { await api('apagar', { colecao: 'pessoa', id: p.id }); }
     catch (e) { toast('Não consegui apagar: ' + e.message, 'ruim'); return; }
     await puxar(); irPara('pessoas');
