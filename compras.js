@@ -181,6 +181,21 @@ function garantirFornecedor(dados) {
   return salvar('forn', Object.assign({}, dados, { nome })).id;
 }
 
+/* Quem já está na casa, seja fornecedor de material ou prestador de mão de obra.
+   O cronograma oferece as DUAS agendas no seletor mas, quando o nome era
+   digitado à mão, procurava só entre fornecedores e cadastrava um `forn` novo —
+   criando um sósia do prestador que já existia, com a pasta de documentos e o
+   histórico dele ficando para trás. */
+function acharNaAgenda(nome) {
+  const k = chaveNome(nome);
+  if (!k) return null;
+  const todos = [
+    ...fornecedoresAtivos().map((x) => ({ reg: x, col: 'forn' })),
+    ...(typeof prestadores === 'function' ? prestadores().map((x) => ({ reg: x, col: 'prest' })) : []),
+  ];
+  return todos.find((x) => chaveNome(x.reg.nome) === k) || null;
+}
+
 function totaisOC(oc) {
   const total = (oc.itens || []).reduce((s, i) => s + (Number(i.qtd) || 0) * (Number(i.preco) || 0), 0);
   const ipi = total * (Number(oc.ipiPerc) || 0) / 100;
@@ -910,7 +925,7 @@ function telaOC(el, id) {
   document.getElementById('ocZap').addEventListener('click', () => enviarOCWhats(o, linkPublico));
   const btnCopiar = document.getElementById('copiarLinkOC');
   if (btnCopiar) btnCopiar.addEventListener('click', () => {
-    navigator.clipboard.writeText(linkPublico).then(() => toast('Link copiado', 'bom'));
+    copiar(linkPublico);
   });
   document.getElementById('novaCotacao').addEventListener('click', () => registrarCotacao(o));
   el.querySelectorAll('[data-escolher]').forEach((b) => b.addEventListener('click', () => escolherCotacao(o, b.dataset.escolher)));

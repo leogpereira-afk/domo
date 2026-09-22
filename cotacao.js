@@ -370,9 +370,7 @@ function telaCotacao(el, id) {
         '<div class="campo"><input type="text" id="linkCot" value="' + esc(url) + '" readonly></div>',
       acoes: [
         { texto: 'Copiar', classe: 'primario', aoClicar: () => {
-          if (!navigator.clipboard) { const i = document.getElementById('linkCot'); if (i) i.select(); toast('Selecione e copie', 'ruim'); return; }
-          navigator.clipboard.writeText(url).then(() => toast('Link copiado', 'bom'))
-            .catch(() => toast('Não consegui copiar', 'ruim'));
+          copiar(url, { campoId: 'linkCot' });
         } },
         { texto: 'Fechar', aoClicar: () => fecharModal() }
       ]

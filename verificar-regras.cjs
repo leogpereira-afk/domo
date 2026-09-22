@@ -76,3 +76,13 @@ test('a lista de coleções do cliente bate com a do servidor', () => {
   assert.deepEqual(doCliente.sort(), doServidor.sort(),
     'cliente e servidor discordam sobre as coleções: ' + doCliente.sort().join(',') + ' × ' + doServidor.sort().join(','));
 });
+
+test('copiar link passa pela função da casa, não pelo clipboard cru', () => {
+  const fora = [];
+  for (const arq of fs.readdirSync('.').filter((f) => f.endsWith('.js') && !f.startsWith('verificar') && f !== 'ui.js')) {
+    if (fs.readFileSync(arq, 'utf8').includes('navigator.clipboard')) fora.push(arq);
+  }
+  // Estava escrito 9 vezes; uma delas sem saída quando o navegador não tem
+  // clipboard (celular velho, rede interna sem HTTPS): o link não ia e nada dizia.
+  assert.deepEqual(fora, [], 'usa navigator.clipboard direto em vez de copiar(): ' + fora.join(', '));
+});

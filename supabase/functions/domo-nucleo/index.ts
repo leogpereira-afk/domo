@@ -771,7 +771,11 @@ Deno.serve(async (req) => {
             entregas: (e.entregas || []).map((x: any) => ({ em: x.em, data: x.data, nf: x.nf, qtd: x.qtd, obs: x.obs })),
             concluida: !!e.concluidaEm,
             pendenteAprovacao: !!e.pendenteAprovacao,
+            // O motivo é obrigatório para quem recusa e nunca saía daqui: a
+            // etapa recusada carregava lápide e sumia da tela do fornecedor,
+            // que ficava sem saber por que a sugestão dele evaporou.
             recusadaEm: e.recusadaEm || null,
+            motivoRecusa: e.motivoRecusa || '',
           })),
         });
       }

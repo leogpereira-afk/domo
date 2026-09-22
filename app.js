@@ -636,11 +636,7 @@ function mostrarLinkObra() {
       '<p class="legenda">Dica: peça pra salvarem na tela inicial do celular. Vira quase um aplicativo.</p>',
     acoes: [
       { texto: 'Copiar link', classe: 'primario', aoClicar: () => {
-        const campo = document.getElementById('linkObra');
-        if (!navigator.clipboard) { if (campo) campo.select(); toast('Selecione e copie à mão', 'ruim'); return; }
-        navigator.clipboard.writeText(url)
-          .then(() => toast('Link copiado', 'bom'))
-          .catch(() => { if (campo) campo.select(); toast('Não consegui copiar — selecione e copie à mão', 'ruim'); });
+        copiar(url, { campoId: 'linkObra' });
       } },
       { texto: 'Mandar no WhatsApp', classe: 'zap', aoClicar: () => {
         window.open(linkWhats('', 'Pessoal, para pedir material da obra usem este link: ' + url), '_blank');
@@ -729,9 +725,7 @@ TELAS.acessos = function (el) {
 
   el.querySelectorAll('[data-copiar]').forEach((b) => b.addEventListener('click', () => {
     const url = b.dataset.copiar;
-    if (!navigator.clipboard) { toast('Copie da caixa ao lado: ' + url, 'ruim'); return; }
-    navigator.clipboard.writeText(url).then(() => toast('Link copiado', 'bom'))
-      .catch(() => toast('Não consegui copiar — selecione e copie à mão', 'ruim'));
+    copiar(url);
   }));
   el.querySelectorAll('[data-zap]').forEach((b) => b.addEventListener('click', () => {
     window.open(linkWhats(b.dataset.zap, b.dataset.msg), '_blank');
@@ -928,8 +922,7 @@ function mostrarSenha(nome, telefone, senha) {
         window.open(linkWhats(telefone, texto), '_blank');
       } } : null),
       { texto: 'Copiar', aoClicar: () => {
-        if (!navigator.clipboard) { const i = document.getElementById('senhaMostrada'); if (i) i.select(); toast('Selecione e copie', 'ruim'); return; }
-        navigator.clipboard.writeText(senha).then(() => toast('Senha copiada', 'bom')).catch(() => toast('Não consegui copiar', 'ruim'));
+        copiar(senha, { ok: 'Senha copiada', campoId: 'senhaMostrada' });
       } },
       { texto: 'Pronto', classe: 'primario', aoClicar: () => fecharModal() }
     ].filter(Boolean)
@@ -1172,10 +1165,7 @@ TELAS.config = function (el) {
   // Links
   el.querySelectorAll('[data-copiar]').forEach((b) => b.addEventListener('click', () => {
     const url = location.origin + location.pathname + b.dataset.copiar;
-    if (!navigator.clipboard) { toast('Copie da barra de endereço: ' + url, 'ruim'); return; }
-    navigator.clipboard.writeText(url)
-      .then(() => toast('Copiado', 'bom'))
-      .catch(() => toast('Não consegui copiar. O link é: ' + url, 'ruim'));
+    copiar(url, { ok: 'Copiado' });
   }));
 
   // Aparelho

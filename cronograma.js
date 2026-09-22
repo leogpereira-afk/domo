@@ -6,7 +6,10 @@
 
 const cronogramas = () => lista('crono');
 
-const etapasVivas = (c) => ((c && c.etapas) || []).filter((e) => e && !e.apagadoEm);
+// O cronograma de verdade: fora o que foi apagado e o que foi RECUSADO (a
+// sugestão recusada continua guardada, com o motivo, mas não é compromisso).
+const etapasVivas = (c) => ((c && c.etapas) || []).filter((e) => e && !e.apagadoEm && !e.recusadaEm);
+const etapasRecusadas = (c) => ((c && c.etapas) || []).filter((e) => e && !e.apagadoEm && e.recusadaEm);
 const responsaveisVivos = (c) => ((c && c.responsaveis) || []).filter((r) => r && !r.apagadoEm);
 
 // Situação da etapa do ponto de vista do gestor.
@@ -312,8 +315,7 @@ function telaCronograma(el, id) {
         '<div class="campo"><input type="text" id="linkPr" value="' + esc(url) + '" readonly></div>',
       acoes: [
         { texto: 'Copiar', classe: 'primario', aoClicar: () => {
-          if (!navigator.clipboard) { const i = document.getElementById('linkPr'); if (i) i.select(); toast('Selecione e copie', 'ruim'); return; }
-          navigator.clipboard.writeText(url).then(() => toast('Link copiado', 'bom')).catch(() => toast('Não consegui copiar', 'ruim'));
+          copiar(url, { campoId: 'linkPr' });
         } },
         { texto: 'Fechar', aoClicar: () => fecharModal() }
       ]
@@ -358,15 +360,23 @@ function editarResponsavel(c, rid) {
         const sel = fundo.querySelector('#selResp').value;
         const novo = Object.assign({}, r, d, {
           id: rid || (Date.now().toString(36) + Math.random().toString(36).slice(2, 5)),
-          origemId: r.origemId || sel || ''
+          origemId: r.origemId || sel || '',
+          // `origemId` sozinho apontava para duas coleções sem dizer qual —
+          // quem lê tinha de adivinhar (ou procurar nas duas e torcer).
+          origemCol: r.origemCol || ''
         });
         // Quem é cadastrado aqui também entra na agenda da empresa, senão o
         // mesmo telefone é digitado de novo na próxima obra.
         if (!novo.origemId) {
-          const ch = chaveNome;
-          const ja = fornecedoresAtivos().find((x) => ch(x.nome) === ch(novo.nome));
-          novo.origemId = ja ? ja.id
-            : salvar('forn', { nome: novo.nome, telefone: novo.telefone, contato: novo.contato, categorias: novo.escopo }).id;
+          // Procura nas DUAS agendas: o seletor acima oferece fornecedor E
+          // prestador, então quem digita o nome de um prestador já cadastrado
+          // ganhava um sósia em 'forn', sem a pasta de documentos dele.
+          const ja = acharNaAgenda(novo.nome);
+          if (ja) { novo.origemId = ja.reg.id; novo.origemCol = ja.col; }
+          else {
+            novo.origemId = salvar('forn', { nome: novo.nome, telefone: novo.telefone, contato: novo.contato, categorias: novo.escopo }).id;
+            novo.origemCol = 'forn';
+          }
         }
         const responsaveis = rid
           ? (base.responsaveis || []).map((x) => x.id === rid ? novo : x)
@@ -487,7 +497,11 @@ async function decidirSugestao(c, eid, aprovar) {
     const y = Object.assign({}, x);
     y.pendenteAprovacao = false;   // false, não delete: o servidor une por id
     if (aprovar) { y.aprovadaEm = new Date().toISOString(); y.aprovadaPor = S.quem || '—'; }
-    else { y.apagadoEm = new Date().toISOString(); y.recusadaEm = new Date().toISOString(); y.motivoRecusa = motivo; }
+    // NÃO carimba apagadoEm: etapa recusada não é lixo, é uma RESPOSTA. Com a
+    // lápide, o motivo — que o modal exige digitar — não tinha como chegar a
+    // ninguém: a tela do fornecedor filtrava o apagado e a etapa simplesmente
+    // desaparecia, como se ele nunca tivesse sugerido nada.
+    else { y.recusadaEm = new Date().toISOString(); y.motivoRecusa = motivo; }
     return y;
   });
   const n = Object.assign({}, base, { etapas });
@@ -561,6 +575,7 @@ async function telaPrazoPublico(args) {
     return '<div class="cartao">' +
       '<h3 style="margin-bottom:2px">' + esc(e.nome) +
         (e.pendenteAprovacao ? ' <span class="etiqueta et-vencendo">sugestão sua — esperando aprovação</span>' : '') +
+        (e.recusadaEm ? ' <span class="etiqueta et-recusada">não entrou no cronograma</span>' : '') +
         (e.concluida ? ' <span class="etiqueta et-entregue">concluída</span>' : '') + '</h3>' +
       '<p class="legenda">' +
         (e.qtd ? fmt.numero(e.qtd) + ' ' + esc(e.unid || '') + ' · ' : '') +
@@ -569,8 +584,15 @@ async function telaPrazoPublico(args) {
       '</p>' +
       (e.obs ? '<p class="legenda">' + esc(e.obs) + '</p>' : '') +
 
+      // O motivo da recusa é obrigatório para quem recusa — e até aqui não tinha
+      // como chegar a quem sugeriu. A etapa sumia sem explicação nenhuma.
+      (e.recusadaEm
+        ? '<div class="aviso atencao">Esta sugestão não entrou no cronograma.' +
+          (e.motivoRecusa ? '<br><b>Motivo:</b> ' + esc(e.motivoRecusa) : '') + '</div>'
+        : '') +
+
       // 1. a confirmação
-      (resp
+      (e.recusadaEm ? '' : resp
         ? '<div class="aviso ' + (resp.atende ? 'bom' : 'ruim') + '">' +
           (resp.atende ? '✅ Você confirmou esta data.' :
             '⛔ Você informou que não consegue atender.' +
@@ -1040,9 +1062,7 @@ function ligarBotoesFornecedor(el) {
     const r = responsaveisVivos(c).find((x) => x.id === rid);
     if (!r || !r.token) { toast('Aguarde sincronizar para gerar o link', 'ruim'); return; }
     const url = linkPrazos(c, r);
-    if (!navigator.clipboard) { toast('O link é: ' + url, 'ruim'); return; }
-    navigator.clipboard.writeText(url).then(() => toast('Link copiado', 'bom'))
-      .catch(() => toast('Não consegui copiar. O link é: ' + url, 'ruim'));
+    copiar(url);
   }));
 }
 
@@ -1114,12 +1134,12 @@ function novoAcompanhamento() {
           // Fornecedor digitado na mão ENTRA no cadastro da empresa — igual ao
           // que a cotação já faz. Sem isso, o telefone dele existia só dentro
           // deste cronograma e era redigitado a cada obra nova.
-          let origemId = sel;
+          let origemId = sel, origemCol = sel ? '' : 'forn';
           if (!origemId) {
-            const ja = fornecedoresAtivos().find((x) => chave(x.nome) === chave(d.nome));
+            const ja = acharNaAgenda(d.nome);   // fornecedor OU prestador
             if (ja) {
-              origemId = ja.id;
-              if (!ja.telefone && d.telefone) salvar('forn', Object.assign({}, ja, { telefone: d.telefone }));
+              origemId = ja.reg.id; origemCol = ja.col;
+              if (!ja.reg.telefone && d.telefone) salvar(ja.col, Object.assign({}, ja.reg, { telefone: d.telefone }));
             } else {
               origemId = salvar('forn', {
                 nome: d.nome.trim(), telefone: d.telefone, categorias: d.escopo
@@ -1238,8 +1258,7 @@ function telaAcompanhaFornecedor(el, cid, rid) {
   const bc = document.getElementById('acCopiar');
   if (bc) bc.addEventListener('click', () => {
     const url = linkPrazos(c, r);
-    if (!navigator.clipboard) { const i = document.getElementById('acLink'); if (i) i.select(); toast('Selecione e copie', 'ruim'); return; }
-    navigator.clipboard.writeText(url).then(() => toast('Link copiado', 'bom')).catch(() => toast('Não consegui copiar', 'ruim'));
+    copiar(url, { campoId: 'acLink' });
   });
   document.getElementById('acEtapa').addEventListener('click', () => editarEtapa(c, null, rid));
   el.querySelectorAll('[data-etapa]').forEach((b) => b.addEventListener('click', () => editarEtapa(c, b.dataset.etapa)));

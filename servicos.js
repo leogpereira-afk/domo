@@ -180,13 +180,10 @@ function pendenciasPrestador(p, dias = 30) {
 
 const prestadoresComPendencia = () => prestadores().filter((p) => pendenciasPrestador(p).some((x) => x.grave)).length;
 
-function notaMedia(p) {
-  const av = (p.avaliacoes || []).filter((a) => a && a.media);
-  if (!av.length) return null;
-  return av.reduce((s, a) => s + Number(a.media), 0) / av.length;
-}
-
-const estrelas = (n) => n == null ? '—' : '★'.repeat(Math.round(n)) + '☆'.repeat(5 - Math.round(n));
+/* A nota do prestador usa a MESMA régua do fornecedor (qualificacao.js, que
+   carrega antes). Havia duas cópias e elas discordavam na mesma tela: esta não
+   descartava avaliação apagada, então uma nota excluída continuava pesando na
+   média — e o cartão ao lado, que usava a outra, mostrava número diferente. */
 
 /* ══════════════════════════════════════════════════════════════════════════
    ORDENS DE SERVIÇO — lista
@@ -555,7 +552,7 @@ function telaOS(el, id) {
           (!['cancelada', 'concluida'].includes(o.situacao) ? '<button class="btn perigo" data-os="cancelada">Cancelar</button>' : '') +
           (o.situacao === 'concluida' && !o.avaliacao ? '<button class="btn" id="avaliar">⭐ Avaliar o prestador</button>' : '') +
         '</div>' +
-        (o.avaliacao ? '<p style="margin-top:10px"><b>Avaliação:</b> ' + estrelas(o.avaliacao.media) +
+        (o.avaliacao ? '<p style="margin-top:10px"><b>Avaliação:</b> ' + estrelasDe(o.avaliacao.media) +
           ' (' + fmt.numero(o.avaliacao.media, 1) + ')' + (o.avaliacao.obs ? '<br>' + esc(o.avaliacao.obs) : '') + '</p>' : '') +
       '</div>' +
 
@@ -1309,7 +1306,7 @@ function telaPrestador(el, id) {
   const pend = pendenciasPrestador(p);
   const graves = pend.filter((x) => x.grave);
   const oss = lista('os').filter((o) => o.prestadorId === p.id);
-  const n = notaMedia(p);
+  const n = mediaAvaliacoes(p);
 
   cabecalho(p.nome, p.especialidade || 'Prestador de serviço',
     '<a class="btn" href="#/prestadores">← Voltar</a>' +
@@ -1392,7 +1389,7 @@ function telaPrestador(el, id) {
 
       '<div class="cartao"><h3>⭐ Avaliações</h3>' +
         (n == null ? '<p class="legenda">Ainda não foi avaliado.</p>'
-          : '<p style="font-size:1.3rem">' + estrelas(n) + ' <b>' + fmt.numero(n, 1) + '</b></p>' +
+          : '<p style="font-size:1.3rem">' + estrelasDe(n) + ' <b>' + fmt.numero(n, 1) + '</b></p>' +
             (p.avaliacoes || []).slice().reverse().map((a) => {
               // O código da OS pode não ter sido gravado (avaliação antiga) —
               // busca pelo id em vez de deixar a linha começar com " · ".

@@ -397,6 +397,11 @@ tfoot td { font-weight: 700; border-top: 2px solid var(--borda); border-bottom: 
      de linha isso estourava a largura do celular e sumia com o botão do PDF. */
   .topo { flex-wrap: wrap; }
   .topo .dir { margin-left: 0; width: 100%; flex-wrap: wrap; }
+  /* Tela sem botão no topo (Recebimento, Documentos, Drive, Acessos) deixava
+     este div VAZIO ocupando uma linha inteira e empurrando o atalho para uma
+     terceira: 119px de cabeçalho no iPhone. São 59px de conteúdo a mais
+     acima da dobra — no celular da obra, um cartão inteiro. */
+  .topo .dir:empty { display: none; }
   .topo .dir .btn { flex: 1 1 auto; }
   /* No celular o atalho encolhe para o ícone, colado à direita do título */
   .atalho-tabela { margin-left: auto; padding: 6px 10px; }

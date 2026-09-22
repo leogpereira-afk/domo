@@ -142,6 +142,25 @@ const etiquetaUrgencia = (u) => {
 };
 
 /* ── Avisos rápidos ────────────────────────────────────────────────────────── */
+/* Copiar para a área de transferência. Estava escrito NOVE vezes, e a cópia da
+   ordem de compra (compras.js:928) era a única sem rede de segurança: em
+   navegador sem `clipboard` — ou fora de HTTPS, que é o caso do celular velho
+   da obra em rede interna — ela estourava sem dizer nada e o link não ia. Aqui
+   a saída sempre existe: seleciona o campo, ou mostra o texto no aviso.
+   `campoId` é o input que deve ficar selecionado quando não dá para copiar. */
+function copiar(texto, opts = {}) {
+  const ok = opts.ok || 'Link copiado';
+  const selecionar = () => {
+    const i = opts.campoId && document.getElementById(opts.campoId);
+    if (i && i.select) { i.select(); toast('Selecione e copie à mão', 'ruim'); return true; }
+    return false;
+  };
+  if (!navigator.clipboard) { if (!selecionar()) toast('Copie daqui: ' + texto, 'ruim'); return; }
+  navigator.clipboard.writeText(texto)
+    .then(() => toast(ok, 'bom'))
+    .catch(() => { if (!selecionar()) toast('Não consegui copiar. É: ' + texto, 'ruim'); });
+}
+
 function toast(msg, tipo = '') {
   let caixa = document.getElementById('toasts');
   if (!caixa) {
