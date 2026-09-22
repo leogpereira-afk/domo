@@ -33,12 +33,15 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Validar espelho de vagas
+      # As vagas foram para o Diamond (5c4626e). Este passo conferia arquivos que
+      # não existem mais e derrubava a publicação inteira — o site ficou parado
+      # numa versão velha enquanto o repositório andava. Agora o passo confere o
+      # que ESTE app tem: as versões casadas e todo script do index no pacote
+      # offline, mais a sintaxe de cada arquivo que vai para o ar.
+      - name: Conferir versões, pacote offline e sintaxe
         run: |
-          node --test tests-vagas.cjs tests-vagas-api.cjs
-          cmp vagas-domain.js supabase/functions/domo-vagas/vagas-domain.js
-          node --check vagas.js
-          node --check vagas-pdf.js
+          node --test verificar-versoes.cjs
+          for f in *.js; do node --check "$f"; done
 
       - name: Conferir que o backend não é mais o Netlify
         run: |

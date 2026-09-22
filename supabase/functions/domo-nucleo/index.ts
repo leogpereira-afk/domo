@@ -350,10 +350,16 @@ Deno.serve(async (req) => {
       return json({ cfg: cfgSemSegredo(await lerCfgBruta()) });
     }
     // Tudo, paginado — lixeira inclusive: backup é retrato, não vitrine.
+    // MENOS a coleção _drive: ali mora a chave de renovação do Google, que abre
+    // a pasta da empresa sem senha nenhuma. Backup vai para OUTRO repositório
+    // (o hub), então mandá-la junto seria copiar a chave para fora de casa. Um
+    // backup restaurado volta sem o Drive conectado — a direção reconecta em
+    // dois cliques, e isso é muito melhor do que a chave viajar.
     const de = Number(body.after) || 0;
     const POR_PAGINA = 200;
     const { data, error } = await db.from("domo_registros")
       .select("colecao, id, registro, apagado")
+      .neq("colecao", "_drive")
       .order("colecao").order("id")
       .range(de, de + POR_PAGINA - 1);
     if (error) return json({ error: error.message }, 500);
