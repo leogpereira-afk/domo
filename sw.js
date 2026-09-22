@@ -1,10 +1,10 @@
 /* Service worker — deixa o app abrir sem internet (a obra costuma ter sinal ruim).
    Regra do kit: SUBIR o número do CACHE a cada publicação, senão o navegador
    continua servindo o arquivo velho. */
-const CACHE = 'domo-shell-v57';
+const CACHE = 'domo-shell-v58';
 const ARQUIVOS = [
   './', './index.html', './styles.css', './config.js', './store.js', './ui.js',
-  './pdf.js', './compras.js', './acervo.js', './cotacao.js', './cronograma.js', './qualificacao.js', './compromissos.js', './servicos.js', './rh.js', './permutas.js', './drive.js', './app.js?v=57',
+  './pdf.js', './compras.js', './acervo.js', './cotacao.js', './cronograma.js', './qualificacao.js', './compromissos.js', './servicos.js', './rh.js', './permutas.js', './drive.js', './app.js?v=58',
   './libs/jspdf.umd.min.js', './logo-diamond.png', './logo-domo.png', './logo-domo-branco.png',
   './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'
 ];
@@ -27,11 +27,10 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   // Nunca guardar chamada de servidor em cache: dado tem que ser o do momento.
-  // O backend agora é o Supabase (outro domínio) — a regra antiga, que olhava
-  // o caminho /.netlify/functions/, virava letra morta e o app passaria a
-  // servir resposta velha de sincronização.
+  // O backend é o Supabase, em outro domínio — por isso a régua olha o HOST.
+  // (A régua antiga olhava o caminho /.netlify/functions/, que depois da
+  // migração nunca mais apareceu: o app passou a servir sincronização velha.)
   if (url.hostname.endsWith('supabase.co')) return;
-  if (url.pathname.includes('/.netlify/functions/')) return;
   if (e.request.method !== 'GET') return;
 
   e.respondWith(

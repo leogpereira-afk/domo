@@ -1,6 +1,6 @@
 // Quem é quem, e o que cada um pode fazer. ÚNICO lugar onde isso é decidido.
 //
-// Porte fiel de netlify/functions/lib/acesso.mjs. A regra já morou em dois
+// A regra já morou em dois
 // lugares uma vez (o acervo não conhecia os acessos individuais e desligava os
 // arquivos para quem tinha senha própria); aqui as três functions importam
 // daqui.

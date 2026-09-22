@@ -512,6 +512,12 @@ function telaOS(el, id) {
           : '') +
         (t.adiantamentoSaldo ? '<div class="aviso atencao" style="margin-top:10px">Adiantamento a amortizar: <b>' +
           fmt.brl(t.adiantamentoSaldo) + '</b> de ' + fmt.brl(t.adiantamento) + '</div>' : '') +
+        // O cálculo já existia e ninguém via: amortizar mais do que foi adiantado
+        // significa que uma medição descontou dinheiro que nunca foi pago. É erro
+        // de dinheiro, e o sistema era a única coisa capaz de notar.
+        (t.adiantamentoExcesso ? '<div class="aviso ruim" style="margin-top:10px"><b>Confira:</b> já foram amortizados ' +
+          fmt.brl(t.adiantamentoExcesso) + ' a mais do que o total adiantado (' + fmt.brl(t.adiantamento) +
+          '). Alguma medição descontou adiantamento que não existe.</div>' : '') +
       '</div>' +
 
       // ── Diário ──

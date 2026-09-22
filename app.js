@@ -990,6 +990,18 @@ function trocarMinhaSenha() {
   });
 }
 
+/* A rota #/vagas continua existindo só para quem tinha o endereço salvo: a
+   gestão foi inteira para o Diamond. Sem isto, o link antigo cairia no painel
+   sem explicação. Ficava registrada DEPOIS da partida do app (e numa linha só),
+   então abrir o sistema direto em #/vagas nem achava a tela. */
+TELAS.vagas = function (el) {
+  cabecalho('Vagas de garagem', 'Gestão transferida para o Diamond');
+  el.innerHTML = '<div class="cartao"><h2>As vagas agora estão no Diamond</h2>' +
+    '<p>Espelho, compradores, histórico e PDF reunidos no sistema de vendas.</p>' +
+    '<a class="btn primario" target="_blank" rel="noopener" ' +
+      'href="https://leogpereira-afk.github.io/diamond/#/admin/vagas">Abrir vagas no Diamond →</a></div>';
+};
+
 TELAS.config = function (el) {
   const cfg = S.cfg || {};
   const emp = cfg.empresa || {};
@@ -1163,12 +1175,10 @@ TELAS.config = function (el) {
     if (!n) return;
     S.quem = n; localStorage.setItem(K.quem, n); toast('Nome salvo', 'bom'); pintarMenu('config');
   });
-  document.getElementById('sair').addEventListener('click', async () => {
-    if (S.fila.length && !await confirmar('Ainda tem ' + S.fila.length + ' item(ns) esperando envio. Sair mesmo assim?', { perigo: true })) return;
-    localStorage.removeItem(K.senha);
-    S.senhaHash = '';
-    render();
-  });
+  // Uma saída só. Este botão apagava SÓ a senha e deixava no aparelho o cache
+  // inteiro do sistema — inclusive a folha de RH — enquanto o Sair do rodapé
+  // limpava tudo. Eram duas metades da mesma regra e esta não protegia nada.
+  document.getElementById('sair').addEventListener('click', sair);
 
   document.getElementById('esvaziar').addEventListener('click', async () => {
     if (!await confirmar('Apagar DE VEZ tudo que está na lixeira? Isso não tem volta.', { perigo: true, ok: 'Apagar de vez' })) return;
@@ -1188,7 +1198,10 @@ TELAS.config = function (el) {
         'Confira antes.</div>' +
         '<div id="fNum"><div class="linha">' +
           campo('Documento', seletor('colecao', 'sc', [
-            { v: 'sc', t: 'Solicitações (SC)' }, { v: 'oc', t: 'Ordens de compra (OC)' }, { v: 'os', t: 'Ordens de serviço (OS)' }])) +
+            // nasce da lista de coleções: cotação e cronograma ficaram de fora
+            // quando foram criadas, e ninguém notou
+            ...COLECOES_APP.filter((c) => COLECOES_DOMO[c].pre)
+              .map((c) => ({ v: c, t: COLECOES_DOMO[c].nome + ' (' + COLECOES_DOMO[c].pre + ')' }))])) +
           campo('Próximo número', entrada('proximo', '1', { inputmode: 'numeric' })) +
         '</div></div>',
       acoes: [
@@ -1239,15 +1252,17 @@ function editarObra(i) {
 function pintarLixeira() {
   const alvo = document.getElementById('lixeira');
   if (!alvo) return;
-  const cols = { sc: 'Solicitação', oc: 'Ordem de compra', os: 'Ordem de serviço', forn: 'Fornecedor',
-    doc: 'Documento', proj: 'Projeto', prest: 'Prestador' };
+  // TODAS as coleções: a lista fixa de antes mostrava 7 das 12, então cotação,
+  // cronograma, compromisso, colaborador e permuta apagados nunca apareciam para
+  // restaurar — e o botão de esvaziar apagava as 12 de qualquer jeito.
+  const cols = COLECOES_DOMO;
   const itens = [];
-  for (const c of Object.keys(cols)) {
+  for (const c of COLECOES_APP) {
     for (const r of (S.reg[c] || [])) if (r.apagadoEm) itens.push({ c, r });
   }
   if (!itens.length) { alvo.innerHTML = '<p class="legenda">Vazia.</p>'; return; }
   alvo.innerHTML = '<table><tbody>' + itens.map(({ c, r }) =>
-    '<tr><td>' + esc(cols[c]) + '</td><td><b>' + esc(r.codigo || r.nome || r.id) + '</b></td>' +
+    '<tr><td>' + esc((cols[c] || {}).nome || c) + '</td><td><b>' + esc(r.codigo || r.nome || r.id) + '</b></td>' +
     '<td>apagado ' + fmt.quando(r.apagadoEm) + ' por ' + esc(r.apagadoPor || '—') + '</td>' +
     '<td class="num"><button class="btn pequeno" data-restaurar="' + esc(c) + '|' + esc(r.id) + '">Restaurar</button></td></tr>'
   ).join('') + '</tbody></table>';
@@ -1559,4 +1574,4 @@ if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 }
 
-TELAS.vagas=el=>{cabecalho('Vagas de garagem','Gestão transferida para o Diamond');el.innerHTML='<div class="cartao"><h2>As vagas agora estão no Diamond</h2><p>Espelho, compradores, histórico e PDF reunidos no sistema de vendas.</p><a class="btn primario" href="https://leogpereira-afk.github.io/diamond/?v=19#/admin/vagas">Abrir vagas no Diamond →</a></div>';};
+

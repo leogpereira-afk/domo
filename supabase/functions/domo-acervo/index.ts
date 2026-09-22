@@ -2,7 +2,7 @@
 // Supabase Edge Function "acervo" — arquivos grandes (projetos, documentos,
 // fotos de recebimento e do diário).
 //
-// Porte de netlify/functions/acervo.mjs. MANTÉM o protocolo em partes que o
+// MANTÉM o protocolo de envio em partes que o
 // cliente já usa (iniciar → parte → finalizar → baixarParte): o limite de corpo
 // de uma Edge Function é parecido com o do Netlify, e trocar o protocolo
 // obrigaria a reescrever o upload do app — que funciona no 4G da obra e já foi

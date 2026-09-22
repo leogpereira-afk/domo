@@ -8,7 +8,27 @@
 // TODAS as coleções do sistema. Ao criar uma nova, acrescente AQUI (e no
 // COLECOES do nucleo.mjs) — era em dois lugares e a cotação chegava do
 // servidor mas era jogada fora por não existir nesta lista.
-const COLECOES_APP = ['sc', 'cot', 'oc', 'os', 'crono', 'forn', 'prest', 'doc', 'proj', 'comp', 'pessoa', 'permuta'];
+/* Lista ÚNICA das coleções no cliente — espelho de
+   supabase/functions/_shared/colecoes.ts (verificar-regras.cjs falha se as duas
+   divergirem). `pre` é o prefixo do número do documento; vazio = não numera.
+   Ela guarda o NOME porque duas telas escreviam a própria lista à mão e as duas
+   envelheceram: a lixeira mostrava 7 das 12 coleções — enquanto o botão de
+   esvaziar apagava as 12 — e o 'recomeçar a numeração' oferecia 3 das 5. */
+const COLECOES_DOMO = {
+  sc:      { pre: 'SC', nome: 'Solicitação de compra' },
+  cot:     { pre: 'CT', nome: 'Cotação' },
+  crono:   { pre: 'CR', nome: 'Cronograma' },
+  oc:      { pre: 'OC', nome: 'Ordem de compra' },
+  os:      { pre: 'OS', nome: 'Ordem de serviço' },
+  forn:    { pre: '',   nome: 'Fornecedor' },
+  prest:   { pre: '',   nome: 'Prestador de serviço' },
+  doc:     { pre: '',   nome: 'Documento' },
+  proj:    { pre: '',   nome: 'Projeto' },
+  comp:    { pre: '',   nome: 'Compromisso' },
+  pessoa:  { pre: '',   nome: 'Colaborador' },
+  permuta: { pre: '',   nome: 'Permuta' },
+};
+const COLECOES_APP = Object.keys(COLECOES_DOMO);
 const regVazio = () => COLECOES_APP.reduce((a, c) => { a[c] = []; return a; }, {});
 
 const S = {

@@ -204,7 +204,6 @@ tfoot td { font-weight: 700; border-top: 2px solid var(--borda); border-bottom: 
 .et-nova { background: var(--azul-claro); color: var(--azul); }
 .et-aprovada, .et-emitida { background: #e8f0fe; color: #14459c; }
 .et-cotacao { background: #f3e8fd; color: #6b21a8; }
-.et-comprado, .et-enviada, .et-confirmada { background: var(--ambar-claro); color: var(--ambar); }
 .et-transito { background: #e6f1fb; color: #0b5d94; }
 .et-parcial { background: #fff4d6; color: #8a6100; }
 .et-entregue, .et-concluida, .et-atendida { background: var(--verde-claro); color: var(--verde); }
@@ -285,7 +284,6 @@ tfoot td { font-weight: 700; border-top: 2px solid var(--borda); border-bottom: 
 .filtros input[type=search] { max-width: 280px; }
 .filtros select { max-width: 200px; }
 
-.busca-topo { flex: 1; max-width: 340px; }
 
 /* Abas de dentro da tela (mesma coisa vista de dois ângulos) */
 .abas { display: flex; gap: 6px; margin-bottom: 14px; border-bottom: 2px solid var(--borda); flex-wrap: wrap; }
@@ -423,7 +421,6 @@ tfoot td { font-weight: 700; border-top: 2px solid var(--borda); border-bottom: 
 }
 
 @media (min-width: 901px) {
-  .so-celular { display: none; }
 }
 
 /* ── Calendário do RH ──────────────────────────────────────────────────────── */

@@ -1,6 +1,6 @@
 // ============================================================================
 // Supabase Edge Function "nucleo" — backend do sistema da Domo Construtora.
-// Porte de netlify/functions/nucleo.mjs: MESMO contrato de ações (o cliente em
+// MESMO contrato de ações do backend anterior (o cliente em
 // store.js não muda), agora sobre Postgres em vez de Netlify Blobs.
 //
 // Duas camadas de autenticação, iguais às de sempre:

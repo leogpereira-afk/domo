@@ -99,7 +99,6 @@ const SITUACOES = {
   // solicitação
   nova: { txt: 'Nova', cls: 'et-nova' },
   aprovada: { txt: 'Aprovada', cls: 'et-aprovada' },
-  cotacao: { txt: 'Em cotação', cls: 'et-cotacao' },
   em_cotacao: { txt: 'Em cotação', cls: 'et-cotacao' },
   em_compra: { txt: 'Em compra', cls: 'et-cotacao' },
   // cotação

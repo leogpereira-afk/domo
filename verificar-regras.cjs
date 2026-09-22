@@ -66,3 +66,13 @@ test('todo ponto que apaga avisa antes quando está sem internet', () => {
   // 'apagar' não passa pela fila offline: sem o aviso, o canteiro vê 'Failed to fetch'.
   assert.deepEqual(faltando, [], 'apaga sem avisar que está offline: ' + faltando.join(', '));
 });
+
+test('a lista de coleções do cliente bate com a do servidor', () => {
+  const cli = fs.readFileSync('store.js', 'utf8'), srv = fs.readFileSync('supabase/functions/_shared/colecoes.ts', 'utf8');
+  const doCliente = [...cli.matchAll(/^\s{2}([a-z]+):\s*\{ pre: '([^']*)'/gm)].map((m) => m[1] + ':' + m[2]);
+  const doServidor = [...srv.matchAll(/^\s{2}([a-z]+):\s*\{ pre: "([^"]*)"/gm)].map((m) => m[1] + ':' + m[2]);
+  // A lista já morou em três arquivos e as coleções novas ficaram de fora do
+  // backup diário sem ninguém notar; depois a lixeira mostrou 7 das 12.
+  assert.deepEqual(doCliente.sort(), doServidor.sort(),
+    'cliente e servidor discordam sobre as coleções: ' + doCliente.sort().join(',') + ' × ' + doServidor.sort().join(','));
+});
