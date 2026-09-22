@@ -70,7 +70,6 @@ const MENU = [
   // Permuta é troca com o parceiro: fica ao lado de quem são os parceiros.
   { rota: 'permutas', icone: '🤝', texto: 'Permutas',
     bolha: () => (typeof permutas === 'function' ? permutas().filter((x) => !x.encerrada).length : 0) },
-  { grupo: 'Diamond' },
   { grupo: 'Acervo' },
   // A tabela de vendas do Diamond é OUTRO sistema (mesmo backend Supabase);
   // entra aqui como atalho, além do botão fixo no topo.
