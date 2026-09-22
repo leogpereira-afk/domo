@@ -1230,6 +1230,9 @@ function jaRecebido(o, itemId) {
 
 function telaReceberOC(o) {
   if (!o) return;
+  // O id do recebimento nasce ANTES das fotos: é por ele que a fila de arquivos
+  // costura, depois, a foto que ficou guardada no aparelho.
+  const recId = Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
   const fotos = [];
   // Fotos que não subiram (obra sem sinal). Ficam marcadas na tela e o
   // recebimento avisa quantas faltam anexar.
@@ -1287,7 +1290,7 @@ function telaReceberOC(o) {
         if (enviandoFotos.tem) { toast('Espere as fotos terminarem de subir', 'ruim'); return; }
 
         const reg = {
-          id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+          id: recId,
           em: new Date().toISOString(), por: d.por || S.quem,
           itens: recebidos, nf: d.nf, obs: d.obs, fotos: fotos.slice(),
           // Foto que não subiu fica anotada aqui para ser anexada depois.
@@ -1344,18 +1347,28 @@ function telaReceberOC(o) {
       enviandoFotos.qtd++;
       try {
         const menor = await encolherFoto(file);
-        const meta = await enviarArquivo(menor, (p) => { prog.querySelector('i').style.width = (p * 100) + '%'; });
-        fotos.push(meta.id);
-        img.style.opacity = '1';
+        // Guarda no APARELHO se não conseguir subir agora: antes o File ficava
+        // num array em memória e morria com a aba — o recebimento ia para o
+        // servidor com um número de "fotos pendentes" e nenhuma foto.
+        const r = await anexarFoto({
+          file: menor, colecao: 'oc', registroId: o.id, subLista: 'recebimentos', subId: recId, campo: 'fotos',
+          onProgresso: (p) => { prog.querySelector('i').style.width = (p * 100) + '%'; }
+        });
+        if (r.pendente) {
+          fotosPendentes.push(file);
+          img.style.opacity = '.35';
+          img.style.outline = '2px solid var(--vermelho)';
+          img.title = 'Guardada no aparelho — sobe sozinha quando a internet voltar';
+          toast('Sem internet: a foto ficou GUARDADA no aparelho e sobe sozinha quando conectar.', 'ruim');
+        } else {
+          fotos.push(r.id);
+          img.style.opacity = '1';
+        }
       } catch (e) {
-        // Sem sinal a foto sumia da tela e o recebimento ia sem prova nenhuma.
-        // Agora ela fica marcada e pode ser anexada depois, pela própria tela
-        // de recebimento.
-        fotosPendentes.push(file);
         img.style.opacity = '.35';
         img.style.outline = '2px solid var(--vermelho)';
-        img.title = 'Não subiu — anexe de novo quando a internet voltar';
-        toast('A foto não subiu (sem internet). Ela fica marcada para você anexar depois.', 'ruim');
+        img.title = 'Não foi possível guardar: ' + e.message;
+        toast('Não consegui nem subir nem guardar a foto: ' + e.message, 'ruim');
       } finally {
         enviandoFotos.qtd--;
       }
@@ -1412,12 +1425,18 @@ function anexarFotoRecebimento(ocId, recId) {
       enviando.qtd++;
       try {
         const menor = await encolherFoto(file);
-        const meta = await enviarArquivo(menor, (p) => { prog.querySelector('i').style.width = (p * 100) + '%'; });
-        novas.push(meta.id);
-        img.style.opacity = '1';
+        const r = await anexarFoto({
+          file: menor, colecao: 'oc', registroId: ocId, subLista: 'recebimentos', subId: recId, campo: 'fotos',
+          onProgresso: (p) => { prog.querySelector('i').style.width = (p * 100) + '%'; }
+        });
+        if (r.pendente) {
+          img.style.opacity = '.35'; img.style.outline = '2px solid var(--vermelho)';
+          img.title = 'Guardada no aparelho — sobe sozinha quando a internet voltar';
+          toast('Sem internet: a foto ficou GUARDADA no aparelho e sobe sozinha quando conectar.', 'ruim');
+        } else { novas.push(r.id); img.style.opacity = '1'; }
       } catch (e) {
         img.remove();
-        toast('Ainda sem internet para subir a foto: ' + e.message, 'ruim');
+        toast('Não consegui nem subir nem guardar a foto: ' + e.message, 'ruim');
       } finally { enviando.qtd--; }
     }
     prog.style.display = 'none';

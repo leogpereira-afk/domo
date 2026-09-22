@@ -215,6 +215,11 @@ function salvar(col, registro, opts = {}) {
   return local;
 }
 
+/* Contagem de fotos ainda guardadas no aparelho, para a tela poder dizer. */
+async function fotosAindaNoAparelho() {
+  try { return ((await filaArqListar()) || []).length; } catch { return 0; }
+}
+
 // Acrescenta uma linha no histórico do registro (quem fez, quando, o quê).
 function historiar(registro, o_que) {
   const h = Array.isArray(registro.historico) ? registro.historico.slice() : [];
@@ -319,6 +324,9 @@ async function puxar() {
   document.dispatchEvent(new CustomEvent('domo:status'));
   try {
     await subirFila();
+    // As fotos guardadas no aparelho sobem junto com o resto: a prova da
+    // entrega não pode depender de a pessoa lembrar de reabrir a tela.
+    await subirArquivosPendentes();
     const r = await api('snapshot');
     const novo = regVazio();
     for (const reg of (r.registros || [])) {
@@ -476,6 +484,87 @@ function salvarNoAparelho(blob, nome) {
   a.href = url; a.download = nome || 'arquivo';
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+/* ── Fila de ARQUIVOS (IndexedDB) ──────────────────────────────────────────────
+   A regra de ouro do sistema é "salva no aparelho primeiro". Ela valia para os
+   registros (S.fila em localStorage) e NÃO valia para arquivo nenhum: a foto do
+   recebimento que não subia ficava num array em MEMÓRIA e morria com a aba. O
+   registro guardava só a CONTAGEM de fotos pendentes — um número, sem o arquivo
+   — e a prova da entrega sumia sem ninguém ser avisado.
+
+   Por que IndexedDB e não localStorage: localStorage só guarda texto, e os 5 MB
+   dele são divididos com os outros sistemas da casa. Aqui cabe Blob. */
+const DB_ARQ = 'domo_arquivos_pendentes';
+function abrirBanco() {
+  return new Promise((ok, erro) => {
+    const req = indexedDB.open(DB_ARQ, 1);
+    req.onupgradeneeded = () => { if (!req.result.objectStoreNames.contains('fila')) req.result.createObjectStore('fila', { keyPath: 'id' }); };
+    req.onsuccess = () => ok(req.result);
+    req.onerror = () => erro(req.error || new Error('IndexedDB indisponível'));
+  });
+}
+async function comFila(modo, fn) {
+  const db = await abrirBanco();
+  return new Promise((ok, erro) => {
+    const t = db.transaction('fila', modo);
+    const r = fn(t.objectStore('fila'));
+    t.oncomplete = () => ok(r && r.result !== undefined ? r.result : r);
+    t.onerror = () => erro(t.error);
+  });
+}
+const filaArqGravar = (item) => comFila('readwrite', (st) => st.put(item));
+const filaArqListar = () => comFila('readonly', (st) => st.getAll());
+const filaArqApagar = (id) => comFila('readwrite', (st) => st.delete(id));
+
+/* Anexa uma foto a um sub-item de um registro (ex.: as fotos de UM recebimento
+   dentro da ordem). Tenta subir agora; se não der, guarda o arquivo no aparelho
+   e devolve pendente:true — quem chamou avisa a pessoa, e subirFila() termina o
+   serviço quando a internet voltar. */
+async function anexarFoto({ file, colecao, registroId, subLista, subId, campo, onProgresso }) {
+  const alvo = { colecao, registroId, subLista, subId, campo: campo || 'fotos' };
+  try {
+    const meta = await enviarArquivo(file, onProgresso);
+    return { id: meta.id, pendente: false };
+  } catch (e) {
+    const id = 'fa' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    try {
+      await filaArqGravar(Object.assign({ id, blob: file, nome: file.name, mime: file.type, em: new Date().toISOString() }, alvo));
+      return { id: null, pendente: true, filaId: id };
+    } catch (e2) {
+      // Sem IndexedDB (modo privado de alguns navegadores) não dá para prometer
+      // o que não vai ser cumprido: devolve o erro de verdade.
+      throw e;
+    }
+  }
+}
+
+/* Sobe o que ficou para trás e COSTURA o id no registro certo. */
+async function subirArquivosPendentes() {
+  if (!navigator.onLine || !S.senhaHash) return;
+  let pendentes = [];
+  try { pendentes = (await filaArqListar()) || []; } catch { return; }
+  for (const item of pendentes) {
+    try {
+      const meta = await enviarArquivo(new File([item.blob], item.nome || 'foto.jpg', { type: item.mime || 'image/jpeg' }));
+      const reg = achar(item.colecao, item.registroId);
+      if (reg) {
+        const copia = Object.assign({}, reg);
+        const lista = (copia[item.subLista] || []).map((x) => {
+          if (x.id !== item.subId) return x;
+          const y = Object.assign({}, x);
+          y[item.campo] = [...(y[item.campo] || []), meta.id];
+          y.fotosPendentes = Math.max(0, (Number(y.fotosPendentes) || 0) - 1);
+          return y;
+        });
+        copia[item.subLista] = lista;
+        salvar(item.colecao, copia, { semSubir: true });
+      }
+      await filaArqApagar(item.id);
+    } catch (e) {
+      break;   // sem sinal ainda: tenta de novo no próximo ciclo
+    }
+  }
 }
 
 /* ── Rede ──────────────────────────────────────────────────────────────────── */

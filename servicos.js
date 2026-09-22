@@ -1093,6 +1093,9 @@ function lancarAditivo(o) {
    DIÁRIO DO SERVIÇO
    ══════════════════════════════════════════════════════════════════════════ */
 function novoApontamento(o) {
+  // O id do apontamento nasce ANTES das fotos: é por ele que a fila de arquivos
+  // costura, depois, a foto que ficou guardada no aparelho.
+  const diaId = Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
   const fotos = [];
   const enviando = { qtd: 0, get tem() { return this.qtd > 0; } };
   // A construtora responde junto pelo que acontece com quem está no canteiro.
@@ -1148,7 +1151,7 @@ function novoApontamento(o) {
         const presentes = Array.from(fundo.querySelectorAll('[data-pessoa]:checked')).map((x) => x.dataset.pessoa);
         const comProblema = presentes.filter((pid) => pend.some((y) => y.pessoaId === pid && y.grave));
         const reg = {
-          id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+          id: diaId,
           data: d.data, em: new Date().toISOString(), por: S.quem || '—',
           efetivo: numeroBR(d.efetivo), atividade: d.atividade, obs: d.obs, fotos: fotos.slice(),
           presentes,
@@ -1184,12 +1187,20 @@ function novoApontamento(o) {
       enviando.qtd++;
       try {
         const menor = await encolherFoto(file);
-        const meta = await enviarArquivo(menor, (p) => { prog.querySelector('i').style.width = (p * 100) + '%'; });
-        fotos.push(meta.id);
-        img.style.opacity = '1';
+        // A foto do diário é prova do que aconteceu naquele dia: sem sinal ela
+        // some da tela e some do registro. Agora fica guardada no aparelho.
+        const r = await anexarFoto({
+          file: menor, colecao: 'os', registroId: o.id, subLista: 'diario', subId: diaId, campo: 'fotos',
+          onProgresso: (p) => { prog.querySelector('i').style.width = (p * 100) + '%'; }
+        });
+        if (r.pendente) {
+          img.style.opacity = '.35'; img.style.outline = '2px solid var(--vermelho)';
+          img.title = 'Guardada no aparelho — sobe sozinha quando a internet voltar';
+          toast('Sem internet: a foto ficou GUARDADA no aparelho e sobe sozinha quando conectar.', 'ruim');
+        } else { fotos.push(r.id); img.style.opacity = '1'; }
       } catch (e) {
         img.remove();
-        toast('Não consegui subir a foto: ' + e.message, 'ruim');
+        toast('Não consegui nem subir nem guardar a foto: ' + e.message, 'ruim');
       } finally { enviando.qtd--; }
     }
     prog.style.display = 'none';
