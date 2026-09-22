@@ -265,6 +265,14 @@ async function sair() {
   } else if (!await confirmar('Sair do sistema? Você vai precisar da senha para entrar de novo.', { ok: 'Sair' })) {
     return;
   }
+  limparAparelho();
+}
+
+/* Apagar o rastro do sistema NESTE aparelho. Mora numa função só porque já
+   morou em três, e duas delas esqueciam o cache — o comentário do sair() dizia
+   que ele existe para o dado não ficar no celular depois que a direção desliga
+   um acesso, e era justamente o caminho do acesso revogado que não limpava. */
+function limparAparelho() {
   try {
     localStorage.removeItem(K.senha);
     localStorage.removeItem(K.perfil);
@@ -344,10 +352,11 @@ document.addEventListener('domo:sempermissao', (e) => {
 });
 document.addEventListener('domo:semsenha', () => {
   if (!S.senhaHash) return;
-  S.senhaHash = '';
-  localStorage.removeItem(K.senha);
+  // O acesso foi revogado — e era exatamente aqui que o cache ficava para trás:
+  // apagava a senha e deixava no aparelho o snapshot inteiro do sistema, folha
+  // de RH inclusive. Não há quem confirmar nada: limpa direto.
+  limparAparelho();
   toast('A senha do painel mudou. Entre de novo.', 'ruim');
-  render();
 });
 
 /* ── Entrada (senha única do painel) ───────────────────────────────────────── */

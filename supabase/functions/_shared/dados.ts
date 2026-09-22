@@ -57,7 +57,14 @@ export async function lerTudo(colecoes: string[] | null, todas: string[]): Promi
   let de = 0;
   for (;;) {
     const { data, error } = await db.from("domo_registros").select("colecao, registro")
-      .in("colecao", alvo).range(de, de + 999);
+      .in("colecao", alvo)
+      // ORDER BY não é enfeite: sem ordem estável o Postgres não garante que a
+      // página 2 continue de onde a 1 parou. Um UPDATE concorrente move a linha
+      // e ela some do snapshot — e o cliente reconstrói S.reg inteiro a partir
+      // dele, então o registro some da tela de todo mundo. É a chave primária,
+      // o índice já existe, o custo é zero.
+      .order("colecao").order("id")
+      .range(de, de + 999);
     if (error) throw new Error("lerTudo: " + error.message);
     for (const linha of (data || [])) saida.push({ ...linha.registro, _col: linha.colecao });
     if (!data || data.length < 1000) break;
@@ -82,7 +89,7 @@ export async function lerColecaoBruta(
   for (;;) {
     let q = db.from("domo_registros").select(colunas).eq("colecao", colecao);
     if (filtroApagado !== undefined) q = q.eq("apagado", filtroApagado);
-    const { data, error } = await q.range(de, de + 999);
+    const { data, error } = await q.order("id").range(de, de + 999);
     if (error) throw new Error("lerColecaoBruta(" + colecao + "): " + error.message);
     for (const l of (data || [])) saida.push(l);
     if (!data || data.length < 1000) break;
@@ -98,7 +105,8 @@ export async function lerApagados(): Promise<any[]> {
   let de = 0;
   for (;;) {
     const { data, error } = await db.from("domo_registros")
-      .select("colecao, id, registro").eq("apagado", true).range(de, de + 999);
+      .select("colecao, id, registro").eq("apagado", true).order("colecao").order("id")
+      .range(de, de + 999);
     if (error) throw new Error("lerApagados: " + error.message);
     for (const l of (data || [])) saida.push(l);
     if (!data || data.length < 1000) break;

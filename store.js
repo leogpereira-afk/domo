@@ -195,7 +195,8 @@ function salvar(col, registro, opts = {}) {
     id,
     atualizadoEm: new Date().toISOString(),
     atualizadoPor: S.quem || '—',
-    _pendente: true
+    _pendente: true,
+    _recusado: null   // tentar de novo limpa a recusa anterior
   });
   if (!local.criadoEm) { local.criadoEm = local.atualizadoEm; local.criadoPor = S.quem || '—'; }
 
@@ -245,6 +246,17 @@ async function subirFila() {
     // O servidor agora recusa ITEM A ITEM (nunca o pacote). Avisa o que ficou
     // de fora, com nome e motivo — antes o trabalho sumia calado.
     if ((r.recusados || []).length) {
+      /* O aviso passava e o registro continuava na tela marcado 'enviando…' —
+         para sempre, porque ele já tinha saído da fila. Três minutos depois o
+         snapshot deixava de reinjetá-lo e ele sumia sozinho, sem ninguém
+         entender. Agora a recusa fica CARIMBADA no registro: a tela mostra o
+         motivo no lugar de 'enviando…' e a pessoa decide o que fazer. */
+      for (const rec of r.recusados) {
+        const arr = S.reg[rec.colecao];
+        const alvo = arr && arr.find((x) => x.id === rec.id);
+        if (alvo) { delete alvo._pendente; alvo._recusado = rec.motivo || 'recusado pelo servidor'; }
+      }
+      gravarCache();
       document.dispatchEvent(new CustomEvent('domo:sempermissao', {
         detail: { qtd: r.recusados.length, msg: r.recusados[0].motivo, itens: r.recusados }
       }));
@@ -286,7 +298,7 @@ async function subirFila() {
   }
 }
 
-const limparParaEnvio = (r) => { const c = Object.assign({}, r); delete c._pendente; delete c._col; return c; };
+const limparParaEnvio = (r) => { const c = Object.assign({}, r); delete c._pendente; delete c._recusado; delete c._col; return c; };
 
 // Impressão digital barata do que está na tela: id + quando mudou.
 function assinaturaDados() {

@@ -93,7 +93,10 @@ export const perfilDe = (quem: Quem | null) => (quem && PERFIS[quem.perfil]) ? q
 /* ── O que a obra pode mexer em cada coleção ────────────────────────────────
    Esconder a tela no menu não protege nada: a porta é o servidor. */
 const CAMPOS_OBRA: Record<string, string[]> = {
-  oc: ["recebimentos", "historico", "situacao", "atualizadoEm", "atualizadoPor"],
+  // 'nf' entra porque a nota fiscal é prova de entrega, da mesma família de
+  // 'recebimentos': a tela do almoxarife TEM o campo "Nota fiscal nº", a obra
+  // digitava e o servidor repunha o valor guardado por cima, sem avisar.
+  oc: ["recebimentos", "historico", "situacao", "nf", "atualizadoEm", "atualizadoPor"],
   crono: ["etapas", "responsaveis", "historico", "atualizadoEm", "atualizadoPor"],
 };
 
@@ -224,6 +227,11 @@ export function filtrarLeitura(quem: Quem | null, registros: any[]): any[] {
       const limpo = semValores(r);
       delete limpo.medicoes;
       delete limpo.aditivos;
+      // 'cot' está em semPreco mas não em `le`, então esta limpeza nunca roda
+      // hoje — é régua para o dia em que alguém liberar cotação para a obra. Aí
+      // a lista de fornecedores (com preço de cada um) tem de cair junto, senão
+      // a "limpeza de preço" entregaria justamente a tabela de preços.
+      if (r._col === "cot") delete limpo.fornecedores;
       // O dinheiro também viaja em TEXTO LIVRE. semValores só apaga CHAVES
       // conhecidas (preco/total/…), mas o histórico guarda o valor dentro da
       // frase — "Medição 03 paga: R$ 45.000,00", "Contrato alterado: R$ X → R$ Y"

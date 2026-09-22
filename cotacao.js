@@ -458,16 +458,8 @@ function convidarFornecedor(c) {
         // Fornecedor digitado na mão entra no cadastro — senão a agenda da
         // empresa nunca cresce e todo mundo redigita telefone para sempre.
         if (!novo.fornecedorId) {
-          const chave = (x) => String(x || '').trim().toLowerCase()
-            .normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
-          const doc = String(d.cnpj || '').replace(/\D/g, '');
-          const ja = fornecedoresAtivos().find((x) =>
-            (doc && String(x.cnpj || '').replace(/\D/g, '') === doc) || chave(x.nome) === chave(novo.nome));
-          if (ja) novo.fornecedorId = ja.id;
-          else {
-            const f = salvar('forn', { nome: novo.nome, telefone: novo.telefone, contato: novo.contato });
-            novo.fornecedorId = f.id;
-          }
+          novo.fornecedorId = garantirFornecedor({
+            nome: novo.nome, telefone: novo.telefone, contato: novo.contato, cnpj: d.cnpj });
         }
         const n = Object.assign({}, atual, { fornecedores: [...(atual.fornecedores || []), novo] });
         n.historico = historiar(atual, 'Fornecedor convidado: ' + novo.nome);

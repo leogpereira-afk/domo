@@ -99,8 +99,6 @@ const TREINAMENTOS = ['NR-06 EPI', 'NR-10 Elétrica', 'NR-11 Movimentação de c
 
 // Nome normalizado (sem acento, sem espaço sobrando) para não criar duas pastas
 // do mesmo prestador por causa de um espaço a mais.
-const chaveNome = (x) => String(x || '').trim().toLowerCase()
-  .normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
 
 const prestadores = () => lista('prest').sort((a, b) => String(a.nome || '').localeCompare(String(b.nome || '')));
 // Respeita a lixeira: prestador apagado não pode continuar "cobrindo" a ordem.

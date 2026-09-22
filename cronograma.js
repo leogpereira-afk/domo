@@ -363,8 +363,7 @@ function editarResponsavel(c, rid) {
         // Quem é cadastrado aqui também entra na agenda da empresa, senão o
         // mesmo telefone é digitado de novo na próxima obra.
         if (!novo.origemId) {
-          const ch = (x) => String(x || '').trim().toLowerCase()
-            .normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
+          const ch = chaveNome;
           const ja = fornecedoresAtivos().find((x) => ch(x.nome) === ch(novo.nome));
           novo.origemId = ja ? ja.id
             : salvar('forn', { nome: novo.nome, telefone: novo.telefone, contato: novo.contato, categorias: novo.escopo }).id;
@@ -1107,8 +1106,7 @@ function novoAcompanhamento() {
         const base = achar('crono', c.id) || c;
 
         const sel = fundo.querySelector('#selAcomp').value;
-        const chave = (x) => String(x || '').trim().toLowerCase()
-          .normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
+        const chave = chaveNome;
         let resp = responsaveisVivos(base).find((x) =>
           (sel && x.origemId === sel) || chave(x.nome) === chave(d.nome));
         let responsaveis = base.responsaveis || [];

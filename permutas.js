@@ -220,9 +220,10 @@ function ordensDosParceiros(p) {
 }
 
 // Nome de parceiro comparável: sem acento, sem caixa, sem espaço sobrando.
+// CAIXA ALTA de propósito: é assim que a chave do parceiro já foi gravada.
+// A régua de normalizar é a da casa; só o caixa é próprio daqui.
 function chaveParceiro(nome) {
-  return String(nome == null ? '' : nome).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .trim().replace(/\s+/g, ' ').toUpperCase();
+  return chaveNome(nome).toUpperCase();
 }
 
 /* OS TOTAIS DE TODAS AS PERMUTAS — os números do topo.
@@ -654,7 +655,11 @@ function escolherOrdensPermuta(id) {
           if (!ordemViva(o)) continue;
           const i = ordens.findIndex((x) => x.col === col && x.id === oid);
           const ficha = fichaDaOrdem(o, col);
-          if (i >= 0) { ordens[i] = Object.assign({}, ficha); delete ordens[i].apagadoEm; delete ordens[i].apagadoPor; }
+          // `delete` não ressuscita: o servidor junta item a item com
+          // {...guardado, ...novo}, e chave AUSENTE mantém a do guardado — a
+          // ordem voltava na tela e sumia de novo no snapshot seguinte. Tem de
+          // ir null explícito (vivosP já trata null como vivo).
+          if (i >= 0) ordens[i] = Object.assign({}, ficha, { apagadoEm: null, apagadoPor: null });
           else ordens.push(ficha);
           novas.push(nomeOrdem(col, ficha.numero));
         }

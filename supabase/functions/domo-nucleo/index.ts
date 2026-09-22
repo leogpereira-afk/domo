@@ -82,7 +82,14 @@ const CAMPOS_UNIAO = ["historico", "recebimentos", "cotacoes", "anexos", "medico
   // RH (coleção 'pessoa'): cada lista da ficha se junta por id como as demais.
   "pagamentos", "ferias", "asos",
   // Permuta: as ordens aceitas e os lançamentos de cada lado.
-  "ordens", "lancamentos"];
+  "ordens", "lancamentos",
+  // VÍNCULOS. São listas de texto (ids), não de objetos, e ficaram de fora da
+  // união desde sempre: o cliente monta `[...(s.ocIds||[]), novo]` a partir do
+  // CACHE dele e grava a lista inteira. Um aparelho que ainda não tinha visto o
+  // vínculo criado por outro apagava o elo ao salvar qualquer coisa — sem erro,
+  // sem aviso, e o documento ficava órfão. Vínculo é acréscimo por natureza;
+  // para desfazer um, há ação explícita, nunca a omissão da chave.
+  "scIds", "ocIds", "cotIds"];
 
 // Dentro de cada item unido, estas listas também se juntam em vez de se
 // sobrepor (as remessas e as entregas moram DENTRO da etapa; os preços moram
@@ -96,6 +103,9 @@ function unirPorId(antigo: any, novo: any): any[] {
   const vistos = new Map<string, any>();
   for (const it of a.concat(b)) {
     if (!it) continue;
+    // Lista de texto (os vínculos: scIds/ocIds/cotIds): a chave é o próprio
+    // valor. Sem isto, `it.id` seria undefined e todos cairiam na mesma chave.
+    if (typeof it === "string") { vistos.set(it, it); continue; }
     const k = it.id || (it.em || "") + "|" + (it.o_que || it.texto || "");
     const anterior = vistos.get(k) || {};
     const unido: any = { ...anterior, ...it };

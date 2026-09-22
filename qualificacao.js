@@ -70,16 +70,14 @@ const CRITERIOS_FORN = [
 
 // Toda ordem de compra daquele fornecedor (por id ou, para as antigas, por nome).
 function comprasDoFornecedor(f) {
-  const ch = (x) => String(x || '').trim().toLowerCase()
-    .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ');
+  const ch = chaveNome;
   const nome = ch(f.nome);
   return lista('oc').filter((o) => o.situacao !== 'rascunho' &&
     (o.fornecedorId === f.id || (nome && ch((o.fornecedor || {}).nome) === nome)));
 }
 
 function convitesDoFornecedor(f) {
-  const ch = (x) => String(x || '').trim().toLowerCase()
-    .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ');
+  const ch = chaveNome;
   const nome = ch(f.nome);
   const saida = [];
   for (const c of lista('cot')) {

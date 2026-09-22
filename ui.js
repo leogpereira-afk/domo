@@ -11,6 +11,13 @@ const SIT_ESPERANDO = ['enviada', 'confirmada', 'transito', 'parcial'];
    estouraria e as telas simplesmente não existiriam. */
 const TELAS = {};
 
+/* Comparar nome digitado à mão: tira espaço das pontas, acento e maiúscula, e
+   junta espaço repetido. Estava copiada em SEIS lugares (cronograma ×2,
+   cotação, qualificação ×2, serviços) — e a das permutas comparava em CAIXA
+   ALTA. Mesma pergunta, uma régua só. */
+const chaveNome = (x) => String(x == null ? '' : x).trim().toLowerCase()
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
+
 const esc = (s) => String(s == null ? '' : s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');

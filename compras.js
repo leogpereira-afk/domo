@@ -166,6 +166,21 @@ function ligarItens(caixa, comPreco) {
 }
 
 /* ── Totais da ordem de compra ─────────────────────────────────────────────── */
+/* Acha o fornecedor pelo CNPJ ou pelo nome; se não existir, cadastra. Devolve o
+   id — que é o elo que liga a ordem à qualificação, ao histórico de venda e ao
+   índice de permuta. Estava escrita em três lugares com três regras diferentes,
+   e na ordem de compra rodava DEPOIS do salvar: a OC digitada à mão nascia órfã
+   e nunca ganhava o vínculo. */
+function garantirFornecedor(dados) {
+  const nome = String((dados && dados.nome) || '').trim();
+  if (!nome) return '';
+  const doc = String((dados && dados.cnpj) || '').replace(/\D/g, '');
+  const ja = fornecedoresAtivos().find((x) =>
+    (doc && String(x.cnpj || '').replace(/\D/g, '') === doc) || chaveNome(x.nome) === chaveNome(nome));
+  if (ja) return ja.id;
+  return salvar('forn', Object.assign({}, dados, { nome })).id;
+}
+
 function totaisOC(oc) {
   const total = (oc.itens || []).reduce((s, i) => s + (Number(i.qtd) || 0) * (Number(i.preco) || 0), 0);
   const ipi = total * (Number(oc.ipiPerc) || 0) / 100;
@@ -211,7 +226,7 @@ TELAS.solicitacoes = function (el, args) {
         '</tr></thead><tbody>' +
         filtradas.map((s) =>
           '<tr class="clicavel" data-id="' + esc(s.id) + '">' +
-            '<td><b>' + esc(s.codigo || '—') + '</b>' + (s._pendente ? ' <span class="pendente">enviando…</span>' : '') + '</td>' +
+            '<td><b>' + esc(s.codigo || '—') + '</b>' + (s._recusado ? ' <span class="pendente" style="background:#fee2e2;color:#991b1b" title="' + esc(s._recusado) + '">não foi salvo</span>' : s._pendente ? ' <span class="pendente">enviando…</span>' : '') + '</td>' +
             '<td>' + esc((s.solicitante || {}).nome || '—') + '<div style="font-size:.8rem;color:var(--texto-fraco)">' +
               esc((s.solicitante || {}).funcao || '') + '</div></td>' +
             '<td>' + esc(s.obra || nomeObra(s.obraId)) + '<div style="font-size:.8rem;color:var(--texto-fraco)">' + esc(s.setor || '') + '</div></td>' +
@@ -498,7 +513,7 @@ TELAS.compras = function (el, args) {
           const d = o.entregaPrevista ? diasAte(o.entregaPrevista) : null;
           const atraso = d != null && d < 0 && !['entregue', 'cancelada'].includes(o.situacao);
           return '<tr class="clicavel" data-id="' + esc(o.id) + '">' +
-            '<td><b>' + esc(o.codigo || '—') + '</b>' + (o._pendente ? ' <span class="pendente">enviando…</span>' : '') + '</td>' +
+            '<td><b>' + esc(o.codigo || '—') + '</b>' + (o._recusado ? ' <span class="pendente" style="background:#fee2e2;color:#991b1b" title="' + esc(o._recusado) + '">não foi salvo</span>' : o._pendente ? ' <span class="pendente">enviando…</span>' : '') + '</td>' +
             '<td>' + esc((o.fornecedor || {}).nome || '—') + '</td>' +
             '<td>' + esc(o.obra || nomeObra(o.obraId)) + '</td>' +
             '<td class="num">' + fmt.brl(o.totalLiquido) + '</td>' +
@@ -682,6 +697,13 @@ function editorOC(el, id, scId) {
     const ligadas = Array.from(new Set([...(oc.scIds || []), ...(sc ? [sc.id] : []), ...(S.scPuxadas || [])]));
     novo.scIds = ligadas;
 
+    // ANTES de gravar: o vínculo tem de nascer junto com a ordem. Antes o
+    // cadastro era criado depois do salvar e o fornecedorId nunca voltava.
+    if (!novo.fornecedorId && novo.fornecedor && novo.fornecedor.nome) {
+      novo.fornecedorId = garantirFornecedor(
+        Object.assign({}, novo.fornecedor, { banco: novo.dadosBancarios || '' }));
+    }
+
     const salvo = salvar('oc', novo);
 
     for (const sid of ligadas) {
@@ -699,11 +721,6 @@ function editorOC(el, id, scId) {
       salvar('sc', nsc);
     }
     S.scPuxadas = [];
-    // Cadastra o fornecedor novo, se ainda não existir.
-    if (!novo.fornecedorId && novo.fornecedor.nome) {
-      const jaTem = fornecedoresAtivos().find((x) => x.nome.toLowerCase() === novo.fornecedor.nome.toLowerCase());
-      if (!jaTem) salvar('forn', Object.assign({}, novo.fornecedor, { banco: novo.dadosBancarios || '' }));
-    }
     S.formAberto = false;
     irPara('compras/' + salvo.id);
     toast('Ordem de compra salva', 'bom');
@@ -1108,7 +1125,10 @@ TELAS.recebimento = function (el) {
       return '<div class="cartao">' +
         '<div class="barra-acoes" style="justify-content:space-between">' +
           '<div><h3 style="margin:0">' + esc(o.codigo || '—') + ' · ' + esc((o.fornecedor || {}).nome || '') + '</h3>' +
-          '<div class="legenda">' + esc(o.obra || nomeObra(o.obraId)) + ' · ' + fmt.brl(o.totalLiquido) + '</div></div>' +
+          // O celular da obra recebe a ordem SEM preço: imprimir fmt.brl(undefined)
+          // escrevia "R$ 0,00" — uma ordem de R$ 40 mil parecendo não custar nada.
+          '<div class="legenda">' + esc(o.obra || nomeObra(o.obraId)) +
+            (podeVer('compras') ? ' · ' + fmt.brl(o.totalLiquido) : '') + '</div></div>' +
           '<div>' + etiqueta(o.situacao) +
             (d != null ? ' <span class="etiqueta ' + (d < 0 ? 'et-vencido' : d === 0 ? 'et-vencendo' : '') + '">' +
               (d < 0 ? (-d) + ' dia(s) de atraso' : d === 0 ? 'chega hoje' : 'em ' + d + ' dia(s)') + '</span>' : '') +
@@ -1133,7 +1153,10 @@ TELAS.recebimento = function (el) {
           // por aqui apagaria o valor — por isso o botão não aparece para a obra.
           (perfilAtual() !== 'obra'
             ? '<button class="btn" data-data="' + esc(o.id) + '">📅 Data de entrega</button>' : '') +
-          '<button class="btn" data-abrir="' + esc(o.id) + '">Ver ordem</button>' +
+          // 'Ver ordem' leva a #/compras/<id>, que a obra não alcança: o botão
+          // existia só para mandá-la à tela de "sem acesso". O 'Registrar
+          // recebimento' ao lado é o que ela precisa.
+          (podeVer('compras') ? '<button class="btn" data-abrir="' + esc(o.id) + '">Ver ordem</button>' : '') +
           ((o.fornecedor || {}).telefone ? '<button class="btn zap" data-cobrar="' + esc(o.id) + '">Cobrar entrega</button>' : '') +
         '</div>' +
       '</div>';
