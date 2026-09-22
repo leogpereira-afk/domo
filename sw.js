@@ -1,16 +1,21 @@
 /* Service worker — deixa o app abrir sem internet (a obra costuma ter sinal ruim).
    Regra do kit: SUBIR o número do CACHE a cada publicação, senão o navegador
    continua servindo o arquivo velho. */
-const CACHE = 'domo-shell-v51';
+const CACHE = 'domo-shell-v52';
 const ARQUIVOS = [
   './', './index.html', './styles.css', './config.js', './store.js', './ui.js',
-  './pdf.js', './compras.js', './acervo.js', './cotacao.js', './cronograma.js', './qualificacao.js', './compromissos.js', './servicos.js', './rh.js', './permutas.js', './app.js?v=51',
+  './pdf.js', './compras.js', './acervo.js', './cotacao.js', './cronograma.js', './qualificacao.js', './compromissos.js', './servicos.js', './rh.js', './permutas.js', './drive.js', './app.js?v=52',
   './libs/jspdf.umd.min.js', './logo-diamond.png', './logo-domo.png', './logo-domo-branco.png',
   './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ARQUIVOS)).then(() => self.skipWaiting()));
+  // `cache: 'reload'` ao montar o pacote: sem isto, addAll aceita o arquivo velho
+  // que o navegador ainda guarda para a MESMA URL e o assa dentro do cache novo —
+  // subir o número do CACHE não adiantaria nada.
+  e.waitUntil(caches.open(CACHE)
+    .then((c) => c.addAll(ARQUIVOS.map((u) => new Request(u, { cache: 'reload' }))))
+    .then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {

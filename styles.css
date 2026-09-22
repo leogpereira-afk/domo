@@ -446,3 +446,11 @@ tfoot td { font-weight: 700; border-top: 2px solid var(--borda); border-bottom: 
   .cal-cel { min-height: 58px; }
   .cal-ev { font-size: .6rem; }
 }
+
+/* Drive — caminho de pastas e texto de apoio fora de formulário. O `.dica` de
+   antes só valia dentro de .campo; aqui a mesma voz serve solta no cartão. */
+.migalhas { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 12px; font-size: .9rem; }
+.migalhas a { color: var(--azul, #003da8); text-decoration: none; }
+.migalhas a:hover { text-decoration: underline; }
+.migalhas span { color: var(--texto-fraco); }
+.cartao > .dica, p.dica { font-size: .85rem; color: var(--texto-fraco); }

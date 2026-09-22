@@ -19,7 +19,7 @@ const PERFIS_APP = {
       'configurações da empresa e não esvazia a lixeira.',
     telas: ['painel', 'solicitacoes', 'cotacoes', 'compras', 'recebimento', 'servicos',
       'cronogramas', 'acompanhamento', 'fornecedores', 'prestadores', 'projetos', 'documentos',
-      'compromissos', 'calendario', 'vagas', 'permutas', 'tabela-diamond', 'acessos', 'usuarios']
+      'compromissos', 'calendario', 'permutas', 'tabela-diamond', 'drive', 'acessos', 'usuarios']
   },
   obra: {
     txt: 'Obra / almoxarifado',
@@ -78,6 +78,9 @@ const MENU = [
     externo: 'https://leogpereira-afk.github.io/diamond/' },
   { rota: 'projetos', icone: '📐', texto: 'Projetos' },
   { rota: 'documentos', icone: '🗂️', texto: 'Documentos', bolha: () => docsVencendo(30).length },
+  // A pasta da empresa no Google Drive, lida de dentro do sistema. Fica ao lado
+  // de Projetos e Documentos porque é a mesma pergunta: 'onde está o arquivo?'.
+  { rota: 'drive', icone: '📁', texto: 'Drive da Domo' },
   // RH resumido — só a direção vê (não está nas telas de escritório/obra, então
   // podeVer esconde do menu e o roteador barra por hash).
   { grupo: 'Pessoas' },

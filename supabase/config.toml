@@ -16,3 +16,9 @@ verify_jwt = false
 # conferido dentro da própria função.
 [functions.domo-rotina]
 verify_jwt = false
+
+# O Google volta da autorização por GET, sem token nenhum (é o navegador da
+# pessoa, redirecionado). Com verify_jwt = true o gateway barraria antes de a
+# função conferir o bilhete de ida única — a conexão nunca fecharia.
+[functions.domo-drive]
+verify_jwt = false
