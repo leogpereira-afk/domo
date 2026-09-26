@@ -123,7 +123,8 @@ function montarShell() {
   app.innerHTML =
     '<div class="app">' +
       '<aside class="lateral">' +
-        '<div class="marca"><img src="logo-domo-branco.png" alt="Domo Construtora"><small>Gestão de obras</small></div>' +
+        // A lateral é branca (padrão da Central do Léo): logo azul aqui; a branca ficou só no login.
+        '<div class="marca"><img src="logo-domo.png" alt="Domo Construtora"><small>Gestão de obras</small></div>' +
         '<nav class="menu" id="menu"></nav>' +
         '<div class="rodape-lateral" id="rodapeLateral"></div>' +
       '</aside>' +
