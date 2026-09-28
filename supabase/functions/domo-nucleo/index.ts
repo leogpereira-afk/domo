@@ -500,6 +500,51 @@ Deno.serve(async (req) => {
             recusados.push({ colecao: it.colecao, id: it.registro.id, motivo: "só a direção mexe no RH" });
             continue;
           }
+          /* UMA ORDEM SÓ ABATE UMA PERMUTA. O cliente marca a ordem como
+             presa lendo o cache dele (permutas.js), então dois aparelhos que
+             aceitam a MESMA ordem em permutas diferentes dentro da janela de
+             sync passavam os dois — e o mesmo material abatia dois créditos,
+             sem erro em nenhuma das telas. Aqui é o único lugar que enxerga o
+             estado real das outras permutas.
+
+             Recusa item a item (o salvarLote já avisa o cliente), e só barra a
+             ordem que está VIVA noutra permuta: uma ordem tirada de lá (com
+             apagadoEm) volta a ficar livre. */
+          if (it.colecao === "permuta") {
+            const querVivas = (Array.isArray(it.registro.ordens) ? it.registro.ordens : [])
+              .filter((o: any) => o && !o.apagadoEm)
+              .map((o: any) => String(o.col) + ":" + String(o.id));
+            if (querVivas.length) {
+              const jaVivas = new Set(
+                ((atual && Array.isArray(atual.ordens) ? atual.ordens : []) as any[])
+                  .filter((o) => o && !o.apagadoEm)
+                  .map((o) => String(o.col) + ":" + String(o.id)),
+              );
+              // Só as que ESTÃO ENTRANDO agora precisam ser conferidas.
+              const entrando = querVivas.filter((k: string) => !jaVivas.has(k));
+              if (entrando.length) {
+                const todas = await lerTudo(["permuta"], NOMES_COLECOES);
+                const presa = new Map<string, string>();
+                for (const p of todas) {
+                  if (!p || p.id === it.registro.id || p.apagadoEm) continue;
+                  for (const o of (Array.isArray(p.ordens) ? p.ordens : [])) {
+                    if (!o || o.apagadoEm) continue;
+                    const k = String(o.col) + ":" + String(o.id);
+                    if (!presa.has(k)) presa.set(k, String(p.nome || "outra permuta"));
+                  }
+                }
+                const conflito = entrando.filter((k: string) => presa.has(k));
+                if (conflito.length) {
+                  const nomes = conflito.map((k: string) => k.split(":")[1] + " (em " + presa.get(k) + ")");
+                  recusados.push({
+                    colecao: "permuta", id: it.registro.id,
+                    motivo: "ordem já usada em outra permuta: " + nomes.join(", "),
+                  });
+                  continue;
+                }
+              }
+            }
+          }
           // UMA cotação vira UMA ordem de compra. O cliente confere isso no
           // cache dele (cotacao.js), então dois aparelhos que abrem a mesma
           // cotação respondida dentro da janela de sync passavam os dois e

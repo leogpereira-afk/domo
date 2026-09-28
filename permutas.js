@@ -72,7 +72,10 @@ function valorDaOrdem(o, col) {
     if (typeof totaisOC === 'function') return cent(totaisOC(o).totalLiquido);
     return cent(o.totalLiquido != null ? o.totalLiquido : o.total);
   }
-  if (typeof totaisOS === 'function') return cent(totaisOS(o).contrato);
+  // OS: o MEDIDO, não o contrato. Contrato é promessa; a permuta abate o que o
+  // prestador executou de fato. Usar o contrato dava crédito integral a quem
+  // tinha entregue 30% da fachada — e o saldo só se corrigiria no fim da obra.
+  if (typeof totaisOS === 'function') return cent(totaisOS(o).medido);
   return cent(o.total);
 }
 
@@ -125,8 +128,12 @@ function linhasDaPermuta(p) {
       valor, congelado,
       // Centavo de arredondamento não é "mudança de valor".
       mudou: atual !== null && Math.abs(atual - congelado) >= 0.01,
-      bruto: cent((viva && viva.total) || f.bruto),
-      desconto: cent((viva && viva.desconto) || f.desconto),
+      // A decomposição segue a MESMA fonte do valor. Com `||`, um desconto
+      // ZERADO depois do aceite caía no congelado e a linha seguia exibindo um
+      // abatimento que não existe mais — a conta impressa não fechava com o
+      // número ao lado dela.
+      bruto: cent(existe ? viva.total : f.bruto),
+      desconto: cent(existe ? viva.desconto : f.desconto),
       // Continua contando: foi aceita, e o valor foi dado como entregue. Quem
       // decide tirar é a direção, no botão — não a tela sozinha.
       sumiu: temOrdens && !existe,
@@ -389,7 +396,11 @@ function telaPermuta(el, id) {
     '<button class="btn" id="pdfPerm">📄 Extrato</button>' +
     '<button class="btn" id="editPerm">Editar</button>');
 
+  const fechada = !!p.encerrada;
   el.innerHTML =
+    // Encerrada é decisão: a conta congela e os botões saem. Deixá-los ativos
+    // fazia a permuta "encerrada" continuar mudando de saldo pelas costas.
+    (fechada ? '<div class="aviso atencao">Esta permuta está <b>encerrada</b>. Para lançar ou mexer nas ordens, reabra em Editar.</div>' : '') +
     // O SALDO, que é a razão da tela existir — nunca sozinho, sempre com a frase.
     '<div class="cartao" style="text-align:center">' +
       '<div class="rotulo">Saldo da permuta</div>' +
@@ -419,10 +430,10 @@ function telaPermuta(el, id) {
         'entram nesta permuta — cada uma entra por um clique, nunca por dedução.</div>' +
       (r.linhas.length ? r.linhas.map((l) => linhaOrdemPermuta(l)).join('')
         : '<p class="legenda">Nenhuma ordem aceita ainda.</p>') +
-      '<div class="barra-acoes" style="margin-top:10px">' +
+      (fechada ? '' : '<div class="barra-acoes" style="margin-top:10px">' +
         '<button class="btn pequeno primario" id="escolherOrdens">+ Escolher ordens</button>' +
         '<button class="btn pequeno" id="addEntrega">+ Lançar entrega</button>' +
-      '</div>' +
+      '</div>') +
       (r.entregasManuais.length
         ? '<div style="margin-top:10px"><div class="legenda">Fora de ordem (' + fmt.brl(r.emEntregas) + ')</div>' +
           r.entregasManuais.map((l) => linhaLancPermuta(l)).join('') + '</div>' : '') +
@@ -437,8 +448,8 @@ function telaPermuta(el, id) {
         'cada entrega com data, o que foi e a nota anexada nela.</div>' +
       (r.pagamentos.length ? r.pagamentos.map((l) => linhaLancPermuta(l)).join('')
         : '<p class="legenda">Nada entregue ao parceiro ainda.</p>') +
-      '<div class="barra-acoes" style="margin-top:10px">' +
-        '<button class="btn pequeno primario" id="addPagamento">+ Lançar o que entregamos</button></div>' +
+      (fechada ? '' : '<div class="barra-acoes" style="margin-top:10px">' +
+        '<button class="btn pequeno primario" id="addPagamento">+ Lançar o que entregamos</button></div>') +
     '</div>' +
     (p.obs ? '<div class="cartao"><h3>📝 Combinado</h3><p class="legenda" style="white-space:pre-wrap">' + esc(p.obs) + '</p></div>' : '') +
     '<div class="cartao"><h3>Histórico</h3>' + linhaTempo(p.historico) + '</div>' +
@@ -447,15 +458,19 @@ function telaPermuta(el, id) {
   // ── ações
   document.getElementById('editPerm').addEventListener('click', () => editarPermuta(p.id));
   document.getElementById('pdfPerm').addEventListener('click', () => pdfPermuta(achar('permuta', p.id)));
-  document.getElementById('escolherOrdens').addEventListener('click', () => escolherOrdensPermuta(p.id));
-  document.getElementById('addEntrega').addEventListener('click', () => lancamentoPermuta(p.id, 'entrega', null));
-  document.getElementById('addPagamento').addEventListener('click', () => lancamentoPermuta(p.id, 'pagamento', null));
+  // Os botões de ação somem quando a permuta está encerrada — ligar o clique
+  // sem conferir estourava ReferenceError e derrubava a tela inteira.
+  const ligar = (idBotao, fn) => { const b = document.getElementById(idBotao); if (b) b.addEventListener('click', fn); };
+  ligar('escolherOrdens', () => escolherOrdensPermuta(p.id));
+  ligar('addEntrega', () => lancamentoPermuta(p.id, 'entrega', null));
+  ligar('addPagamento', () => lancamentoPermuta(p.id, 'pagamento', null));
 
   el.querySelectorAll('[data-verordem]').forEach((b) => b.addEventListener('click', (ev) => {
     ev.stopPropagation();
     const [col, oid] = b.dataset.verordem.split('/');
     irPara((col === 'oc' ? 'compras/' : 'servicos/') + oid);
   }));
+  if (fechada) { el.querySelectorAll('[data-tirar-ordem],[data-edlanc],[data-rmlanc]').forEach((b) => b.remove()); }
   el.querySelectorAll('[data-tirar-ordem]').forEach((b) => b.addEventListener('click', async () => {
     const [col, oid] = b.dataset.tirarOrdem.split(':');
     const atual = achar('permuta', p.id);
@@ -548,7 +563,10 @@ function gravarPermuta(id, mudanca, textoHistorico) {
 function parceirosCadastrados() {
   return [
     ...lista('forn').map((x) => ({ id: x.id, nome: x.nome, cnpj: x.cnpj || '', col: 'forn' })),
-    ...lista('prest').map((x) => ({ id: x.id, nome: x.nome, cnpj: x.cnpj || '', col: 'prest' }))
+    // O prestador guarda o documento em `cnpjCpf` (pode ser CPF); ler `cnpj`
+    // trazia vazio sempre, e a tela de escolher parceiro ficava sem o que
+    // desempata duas razões sociais parecidas.
+    ...lista('prest').map((x) => ({ id: x.id, nome: x.nome, cnpj: x.cnpjCpf || x.cnpj || '', col: 'prest' }))
   ].filter((x) => x.nome).sort((a, b) => String(a.nome).localeCompare(String(b.nome), 'pt-BR'));
 }
 
@@ -647,9 +665,21 @@ function escolherOrdensPermuta(id) {
         const antes = new Set(vivosP(base.ordens).map((x) => x.col + ':' + x.id));
         const ordens = (base.ordens || []).slice();
         const novas = [], tiradas = [];
-        // liga o que foi marcado (ressuscitando o que estava apagado)
+        /* O QUE VALE É A AÇÃO DA DIREÇÃO, não a diferença entre dois retratos.
+           `marcadas` é o DOM de quando o modal abriu; `antes` é o estado de
+           AGORA. Comparar um com o outro lia como "desmarcou" duas coisas que
+           ninguém desmarcou:
+             1. a ordem que o OUTRO aparelho aceitou enquanto este modal estava
+                aberto (está em `antes`, nunca esteve marcada aqui);
+             2. a ordem que sequer virou CAIXA na tela — cancelada depois,
+                parceiro desligado, ou presa em outra permuta (aparece com 🔒).
+           As duas eram apagadas em silêncio. Por isso o desligamento olha só o
+           que ESTAVA MARCADO quando o modal abriu e deixou de estar. */
+        const inicial = new Set(cands.filter((o) => !o.presaEm && o.nesta).map((o) => o.col + ':' + o.id));
+        // liga o que a direção MARCOU agora (e que ainda não está na permuta)
         for (const chave of marcadas) {
-          if (antes.has(chave)) continue;
+          if (inicial.has(chave)) continue;   // já estava marcado: não é ação nova
+          if (antes.has(chave)) continue;     // outro aparelho já aceitou: nada a fazer
           const [col, oid] = chave.split(':');
           const o = achar(col, oid);
           if (!ordemViva(o)) continue;
@@ -663,9 +693,10 @@ function escolherOrdensPermuta(id) {
           else ordens.push(ficha);
           novas.push(nomeOrdem(col, ficha.numero));
         }
-        // desliga o que foi desmarcado
-        for (const chave of antes) {
-          if (marcadas.has(chave)) continue;
+        // desliga SÓ o que estava marcado quando o modal abriu e a direção desmarcou
+        for (const chave of inicial) {
+          if (marcadas.has(chave)) continue;   // continua marcado
+          if (!antes.has(chave)) continue;     // já saiu da permuta por outro caminho
           const [col, oid] = chave.split(':');
           const i = ordens.findIndex((x) => x.col === col && x.id === oid && !x.apagadoEm);
           if (i >= 0) {
@@ -711,10 +742,15 @@ function lancamentoPermuta(id, tipo, existente) {
     acoes: [
       { texto: 'Voltar', aoClicar: () => fecharModal() },
       { texto: 'Salvar', classe: 'primario', aoClicar: async (fundo) => {
+        // O envio da nota demora no 4G do canteiro: sem trava, o segundo clique
+        // gravava um lançamento gêmeo e o saldo saía dobrado.
+        if (fundo.dataset.salvando === '1') return;
+        fundo.dataset.salvando = '1';
+        const destrava = () => { fundo.dataset.salvando = ''; };
         const d = lerCampos(fundo.querySelector('#fLanc'));
         const valor = numeroBR(d.valor);
-        if (!(valor > 0)) { toast('Informe um valor', 'ruim'); return; }
-        if (!d.data) { toast('Informe a data', 'ruim'); return; }
+        if (!(valor > 0)) { destrava(); toast('Informe um valor', 'ruim'); return; }
+        if (!d.data) { destrava(); toast('Informe a data', 'ruim'); return; }
         let anexo = null;
         const inp = document.getElementById('lancArq');
         if (inp && inp.files && inp.files[0]) {
@@ -725,13 +761,15 @@ function lancamentoPermuta(id, tipo, existente) {
               const b = prog.querySelector('i'); if (b) b.style.width = (pc * 100) + '%';
             });
             anexo = { arquivoId: meta.id, nome: inp.files[0].name, tamanho: inp.files[0].size };
-          } catch (e) { toast('Falha ao enviar a nota: ' + e.message, 'ruim'); return; }
+          } catch (e) { destrava(); toast('Falha ao enviar a nota: ' + e.message, 'ruim'); return; }
         }
         const base = achar('permuta', id);
-        if (!base) { toast('Permuta não encontrada', 'ruim'); return; }
+        if (!base) { destrava(); toast('Permuta não encontrada', 'ruim'); return; }
         const lancs = (base.lancamentos || []).slice();
-        const item = { id: (l.id || idP()), data: d.data, descricao: (d.descricao || '').trim(),
-          valor, tipo, anexo: anexo || l.anexo || null };
+        // A chave `anexo` só vai quando MUDA. Reenviar o anexo antigo atravessa
+        // a união do servidor e ressuscitaria uma nota que outro aparelho trocou.
+        const item = { id: (l.id || idP()), data: d.data, descricao: (d.descricao || '').trim(), valor, tipo };
+        if (anexo) item.anexo = anexo;
         const i = lancs.findIndex((x) => x.id === item.id);
         if (i >= 0) lancs[i] = Object.assign({}, lancs[i], item); else lancs.push(item);
         const n = Object.assign({}, base, { lancamentos: lancs });
