@@ -55,7 +55,7 @@ jobs:
         with:
           enablement: true
 
-      # Sobe só o que o navegador precisa: nada de netlify/, scripts/ ou backup.
+      # Sobe só o que o navegador precisa: nada de supabase/, scripts/ ou backup.
       - name: Montar a pasta do site
         run: |
           mkdir -p _site

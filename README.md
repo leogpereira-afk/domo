@@ -26,7 +26,7 @@ a próxima em Configurações.
 
 ## Como as pessoas entram
 
-- **Obra (sem senha):** `…netlify.app/#/solicitar` — pedir material.
+- **Obra (sem senha):** `…github.io/domo/#/solicitar` — pedir material.
   E `…/#/acompanhar` — **quadro de andamento**: escreve só o nome e vê todos os
   pedidos da obra, os seus em destaque, com o que já foi comprado e quando chega.
   Nunca aparece preço, valor de ordem nem telefone de quem pediu.
@@ -40,9 +40,9 @@ a próxima em Configurações.
 
 ## Stack
 
-Sem framework e sem build: HTML/CSS/JS puro servido estático + Edge Functions do Supabase
-(v2, ESM) + Netlify Blobs. Funciona offline (grava no aparelho e sobe depois) e
-instala como aplicativo no celular (PWA).
+Sem framework e sem build: HTML/CSS/JS puro servido estático no GitHub Pages + Edge
+Functions do Supabase, sobre Postgres (dados) e Storage (arquivos). Funciona offline
+(grava no aparelho e sobe depois) e instala como aplicativo no celular (PWA).
 
 ```
 index.html          carrega tudo nesta ordem ↓
@@ -56,38 +56,47 @@ acervo.js           projetos e documentos
 servicos.js         contrato do prestador, medição, diário, avaliação e a pasta (CND/equipe)
 app.js              menu, roteador, painel, configurações, telas públicas
 
-netlify/functions/
-  lib/colecoes.mjs  LISTA ÚNICA das coleções (mexa aqui + COLECOES_APP do store.js)
-  nucleo.mjs        API principal (Blobs: domo, cfg, seq, log, backup)
-  acervo.mjs        arquivos grandes em partes de 2,5MB (Blobs: arq)
-  rotina.mjs        @daily: backup do dia, limpa lixeira/log antigos
+supabase/functions/
+  _shared/colecoes.ts  LISTA ÚNICA das coleções (mexa aqui + COLECOES_APP do store.js)
+  domo-nucleo/      API principal (Postgres: domo_registros, domo_cfg, domo_seq, domo_log)
+  domo-acervo/      arquivos grandes em partes de 2,5MB (Storage: domo-arquivos)
+  domo-rotina/      diária, pelo pg_cron: backup do dia, limpa lixeira/log antigos
+  domo-drive/       pasta do Google Drive da obra, lida pelo servidor
+  domo-vagas/       só responde 410 apontando para o Diamond (ver no fim)
 ```
 
 ## Publicar
 
-O site **não** está ligado a repositório: publica por upload.
+O site publica sozinho: cada push na `main` roda o `.github/workflows/deploy.yml`,
+que confere versões, pacote offline e sintaxe e sobe a pasta do site no GitHub Pages.
+
+As Edge Functions (`supabase/functions/`) sobem à parte, pela CLI do Supabase:
 
 ```bash
-cd ~/Projetos/domo
-npx -y @netlify/mcp@latest --site-id f4c2d7c1-95e3-487e-aecc-d9d1413353ae --proxy-path "<link do deploy-site>"
+supabase functions deploy <nome> --project-ref reoghclxripktzpdwhiy
 ```
 
 **Sempre suba o número do cache** em `sw.js` (`domo-shell-vN`) e o `VERSAO` do
 `config.js` a cada publicação — senão o navegador continua servindo o arquivo velho.
 
-## Variáveis de ambiente (Netlify)
+## Segredos das Edge Functions (Supabase)
+
+Ficam em Edge Functions → Secrets, no painel do Supabase — nunca neste repositório.
 
 | Nome | Para quê |
 |---|---|
 | `TOKEN` | Mesma string do `config.js`. Autenticação leve, barra robô. |
-| `PAINEL_SENHA` | Senha inicial do painel. Depois que alguém troca em Configurações, quem manda é o hash gravado nos Blobs. |
+| `PAINEL_SENHA` | Senha inicial do painel. Depois que alguém troca em Configurações, quem manda é o hash gravado no banco (`domo_cfg`). |
+| `ROTINA_TOKEN` | Segredo de serviço: entrada da rotina diária (pg_cron) e do backup central (`list`/`getCfg`). Nunca vai para o navegador. |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Conexão com o Google Drive (`domo-drive`). |
+| `SB_SECRET_KEY` | Chave secreta do projeto (`sb_secret_…`). Sem ela, as functions usam a `service_role` que o próprio Supabase injeta. |
 
 ## Ferramentas de administração (Configurações)
 
 - **Esvaziar lixeira agora** — apaga de vez o que está na lixeira, junto com os arquivos que só aqueles registros usavam.
 - **Recomeçar a numeração** — vira de ano ou limpeza de teste. Cuidado: número já usado repete.
 - **Baixar backup agora** — JSON com registros, configuração e a numeração.
-- A rotina diária ainda apaga arquivo órfão (parte no Blobs que nenhum registro usa),
+- A rotina diária ainda apaga arquivo órfão (parte no Storage que nenhum registro usa),
   com carência de 1 dia para não pegar upload esperando registro na fila de um celular sem sinal.
 
 ## Como funciona a medição (o miolo dos serviços)
@@ -115,31 +124,27 @@ npx -y @netlify/mcp@latest --site-id f4c2d7c1-95e3-487e-aecc-d9d1413353ae --prox
 
 ## Armadilhas já pagas (não repetir)
 
-1. **Leitura do Blobs é eventual.** Um registro recém-gravado volta como
-   inexistente por mais de 5 segundos. Resolve com `consistency: 'strong'`, que
-   **só funciona em Function v2** (ESM + `export default`); na runtime antiga
-   (`exports.handler` + `connectLambda`) toda leitura passa a dar erro.
-2. **A listagem (`list`) demora ~1 minuto.** Por isso o `puxar()` do store.js
-   preserva o que foi mexido nos últimos 3 minutos, senão o registro some da tela
-   de quem acabou de criá-lo.
-3. **Numeração:** uma chave por número com `onlyIfNew` (atômico). Contador
-   "lê, soma 1, grava" duplica de verdade.
-4. **`await` em toda gravação de índice.** A Function congela ao responder;
+1. **Não descartar o que o aparelho acabou de mexer.** O `puxar()` do store.js
+   preserva o que foi mexido nos últimos 3 minutos e não veio no snapshot, senão o
+   registro some da tela de quem acabou de criá-lo.
+2. **Numeração:** o número sai do banco, numa operação atômica
+   (`domo_proximo_numero()`). Contador "lê, soma 1, grava" duplica de verdade.
+3. **`await` em toda gravação de índice.** A Function congela ao responder;
    promessa solta não chega a gravar.
-5. **Ordem dos scripts:** quem preenche `TELAS` (compras.js, acervo.js) carrega
+4. **Ordem dos scripts:** quem preenche `TELAS` (compras.js, acervo.js) carrega
    antes do app.js, então `const TELAS = {}` mora no ui.js.
-6. **Renomear function não substitui o pacote antigo na hora** — o endpoint velho
+5. **Renomear function não substitui o pacote antigo na hora** — o endpoint velho
    continuou respondendo código antigo. Se um deploy "não pegar" na Function,
    confira com um marcador no `ping`.
-7. **`verPublico` usa LISTA BRANCA de campos.** Lista negra (`delete x.historico`) sempre fica
+6. **`verPublico` usa LISTA BRANCA de campos.** Lista negra (`delete x.historico`) sempre fica
    para trás quando um módulo novo passa a gravar campo novo dentro do mesmo registro — foi assim
    que medição, diário e avaliação interna começaram a sair no link do prestador.
-8. **Campo de UNIÃO no servidor (`CAMPOS_UNIAO`) nunca REMOVE item de array.** Para apagar um
+7. **Campo de UNIÃO no servidor (`CAMPOS_UNIAO`) nunca REMOVE item de array.** Para apagar um
    documento/pessoa da pasta, marque `apagadoEm` no sub-registro e filtre na leitura — tirar do
    array faz o item voltar no próximo sync.
-9. **Nunca grave a partir do objeto que a tela desenhou.** Com o modal aberto o app não redesenha,
+8. **Nunca grave a partir do objeto que a tela desenhou.** Com o modal aberto o app não redesenha,
    mas o sync troca os dados por baixo: releia com `achar()` na hora de salvar.
-10. **jsPDF:** só Helvetica. Registrar outra fonte sem registrar todos os estilos
+9. **jsPDF:** só Helvetica. Registrar outra fonte sem registrar todos os estilos
    faz cair em Times sem avisar.
 
 

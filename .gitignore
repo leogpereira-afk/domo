@@ -15,4 +15,3 @@ backup-migracao/
 .service-role
 .sbp-token
 supabase/.temp/
-.netlify/

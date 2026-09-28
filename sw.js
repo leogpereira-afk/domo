@@ -28,8 +28,6 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   // Nunca guardar chamada de servidor em cache: dado tem que ser o do momento.
   // O backend é o Supabase, em outro domínio — por isso a régua olha o HOST.
-  // (A régua antiga olhava o caminho /.netlify/functions/, que depois da
-  // migração nunca mais apareceu: o app passou a servir sincronização velha.)
   if (url.hostname.endsWith('supabase.co')) return;
   if (e.request.method !== 'GET') return;
 

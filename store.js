@@ -333,9 +333,8 @@ async function puxar() {
       const col = reg._col;
       if (novo[col]) novo[col].push(reg);
     }
-    // Não descarta o que este aparelho acabou de mexer. A LISTAGEM do Blobs
-    // tem consistência eventual (~1min): um registro recém-gravado pode não
-    // vir no snapshot e sumiria da tela de quem o criou.
+    // Não descarta o que este aparelho acabou de mexer: um registro
+    // recém-gravado que não veio no snapshot sumiria da tela de quem o criou.
     const GRACA_MS = 3 * 60 * 1000;
     const recente = (o) => {
       const t = o.atualizadoEm || o.criadoEm;
@@ -402,8 +401,8 @@ async function puxar() {
 }
 
 /* ── Arquivos grandes (projetos, documentos, fotos) ────────────────────────── */
-// 2,5MB por pedaço: em base64 vira ~3,4MB, com folga no limite de 6MB
-// que a Function do Netlify aceita por requisição.
+// 2,5MB por pedaço: em base64 vira ~3,4MB, com folga no limite de corpo
+// que a Edge Function (domo-acervo) aceita por requisição.
 const TAM_PARTE = 2.5 * 1024 * 1024;
 
 function bytesParaBase64(buf) {
