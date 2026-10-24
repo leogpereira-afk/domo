@@ -6,7 +6,7 @@ import { podeLerRegistro } from './acesso.ts';
 import { NOMES_COLECOES } from './colecoes.ts';
 
 const listaOrc = (x: any): any[] => Array.isArray(x) ? x : [];
-const igualOrc = (a: any, b: any) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+const igualOrc = (a: any, b: any) => (globalThis as any).Orcamento.iguaisJSON(a ?? null, b ?? null);
 function prefixoOrc(antes: any[], depois: any[], titulo: string) {
   if (depois.length < antes.length || antes.some((x, i) => !igualOrc(x, depois[i]))) {
     throw new Error(titulo + ' é preservado; acrescente uma nova decisão sem reescrever o histórico.');

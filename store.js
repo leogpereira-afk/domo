@@ -503,7 +503,7 @@ function estadoSalvamento(col, id) {
 // Três versões permitem unir mudanças independentes sem escolher pelo horário.
 // Só é automático quando um lado permaneceu igual à base ou ambos concordam.
 function consolidarEdicaoOrcamento(base, local, remoto = achar('orc', local.id), escolhas = {}) {
-  const conflitos = [], igual = (a,b) => JSON.stringify(a) === JSON.stringify(b);
+  const conflitos = [], igual = (a,b) => Orcamento.iguaisJSON(a,b);
   const clonar = x => x === undefined ? undefined : structuredClone(x);
   const objeto = x => x && typeof x === 'object' && !Array.isArray(x);
   const chave = x => objeto(x) ? x.id || x.arquivoId || x.item || (x.em ? x.em + '|' + (x.por || '') : null) : null;

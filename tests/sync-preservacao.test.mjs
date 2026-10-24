@@ -19,6 +19,7 @@ function make({ls=storage(),online=false,api=async()=>{throw new Error('NETWORK_
   toast:(...x)=>toasts.push(x),API:'https://example.invalid/api',TOKEN:'synthetic',API_ARQ:'https://example.invalid/arq',
   File,Blob,AbortController,TextEncoder,btoa,atob,crypto:globalThis.crypto,location:{hash:''},render(){},__api:api,__files:files,__uploads:uploads};
  vm.createContext(c);vm.runInContext(source,c,{filename:'store.js'});
+ vm.runInContext(fs.readFileSync(new URL('orcamento-model.js',root),'utf8'),c);
  vm.runInContext(`globalThis.__uploadOriginal=enviarArquivo;globalThis.__comFilaOriginal=comFila;
  api=(...args)=>__api(...args);
  comFila=async(modo,fn)=>{const st={getAll:()=>({result:__files.map(x=>({...x}))}),delete:id=>{const i=__files.findIndex(x=>x.id===id);if(i>=0)__files.splice(i,1);return {result:undefined}},put:item=>{const i=__files.findIndex(x=>x.id===item.id);if(i>=0)__files[i]={...item};else __files.push({...item});return {result:item.id}}};const r=fn(st);return r?.result};
@@ -382,4 +383,18 @@ test('aborted budget IndexedDB transaction preserves predecessor and never repor
  const tx=a.c.transacaoDiarioOrc;a.c.transacaoDiarioOrc=(dono,alterar)=>tx(dono,alterar?(mapa,put,del)=>{alterar(mapa,put,del);throw Error('abort after put');}:null);
  await assert.rejects(a.salvar('orc',{...first,nota:'replacement'},{semSubir:true}),/abort after put/);assert.equal(a.S.reg.orc[0].nota,'original');
  const b=make({ls,indexedDB:db});await b.lerCache();assert.equal(b.S.fila.length,1);assert.equal(b.S.reg.orc[0].nota,'original');
+});
+
+
+test('budget merge ignores JSONB key order without dropping signed history or hiding real changes',()=>{
+ const a=make(),reverse=x=>Array.isArray(x)?x.map(reverse):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).reverse().map(k=>[k,reverse(x[k])])):x;
+ const base={id:'budget',nome:'Synthetic',consolidacoes:[{id:'approved',item:'1',por:'Synthetic',em:'2026-01-01',quantidade:1,totalCentavos:1000}],anexos:[]};
+ a.c.__base=base;a.c.__local={...reverse(base),anexos:[{arquivoId:'synthetic-pdf'}]};a.c.__remote={...base,nome:'Changed independently'};
+ const merged=vm.runInContext('consolidarEdicaoOrcamento(__base,__local,__remote)',a.c);
+ assert.equal(merged.conflitos.length,0);assert.equal(merged.registro.nome,'Changed independently');assert.equal(merged.registro.anexos[0].arquivoId,'synthetic-pdf');
+ assert.deepEqual(JSON.parse(JSON.stringify(merged.registro.consolidacoes)),base.consolidacoes);
+ a.c.__local.consolidacoes[0].por='Forged';
+ const conflict=vm.runInContext('consolidarEdicaoOrcamento(__base,__local,__remote)',a.c);
+ assert.equal(conflict.conflitos[0].caminho,'consolidacoes.1');
+ assert.deepEqual(JSON.parse(JSON.stringify(conflict.registro.consolidacoes)),base.consolidacoes);
 });

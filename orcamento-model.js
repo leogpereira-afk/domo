@@ -1,7 +1,16 @@
 /* Pure budget calculations shared by the browser, Node and the server. */
 (function(root) {
   'use strict';
-  const lista=x=>Array.isArray(x)?x:[], igual=(a,b)=>JSON.stringify(a??null)===JSON.stringify(b??null);
+  // JSONB may reorder object keys. Values and array order remain part of the record.
+  function iguaisJSON(a,b) {
+    if(a===b)return true;
+    if(a===null||b===null||typeof a!=='object'||typeof b!=='object')return false;
+    if(Array.isArray(a)!==Array.isArray(b))return false;
+    if(Array.isArray(a)&&a.length!==b.length)return false;
+    const keys=Object.keys(a);
+    return keys.length===Object.keys(b).length&&keys.every(k=>Object.hasOwn(b,k)&&iguaisJSON(a[k],b[k]));
+  }
+  const lista=x=>Array.isArray(x)?x:[], igual=(a,b)=>iguaisJSON(a??null,b??null);
   const texto=x=>typeof x==='string'&&!!x.trim(), dinheiro=x=>Number.isSafeInteger(x)&&x>=0;
   const decimal=x=>typeof x==='number'&&Number.isFinite(x)&&x>=0, soma=xs=>xs.reduce((s,x)=>s+x.totalCentavos,0);
   const vinculoAtivo=v=>!!v&&!v.apagadoEm&&!v.inativoEm;
@@ -270,6 +279,6 @@
     for(const d of diagnosticarVinculos(orc,reg))if(gruposAlterados.has(chaveFonte(d)))erros.push(...d.motivos);
     return [...new Set(erros)];
   }
-  const api={itens,abc,filtrar,simular,resumo,validar,situacaoItem,criarEvento,baseItem,versao,bloqueios,limiteFonte,diagnosticarVinculos,vinculoAtivo,produtoCentavos};
+  const api={iguaisJSON,itens,abc,filtrar,simular,resumo,validar,situacaoItem,criarEvento,baseItem,versao,bloqueios,limiteFonte,diagnosticarVinculos,vinculoAtivo,produtoCentavos};
   root.Orcamento=api;if(typeof module!=='undefined'&&module.exports)module.exports=api;
 })(globalThis);

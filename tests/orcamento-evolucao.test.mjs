@@ -135,3 +135,20 @@ test('visible active budgets expose shared over-allocation while archived altern
  assert.equal(O.resumo(a,reg).contratadoConfirmadoCentavos,0);
  b.inativoEm='2026-10-24';assert.equal(O.diagnosticarVinculos(a,reg)[0].estado,'confirmado');
 });
+
+
+test('structural JSON equality ignores object key order and preserves arrays, types and fields',()=>{
+ const a={z:[{nome:'Synthetic',valor:2},{valor:null}],a:{x:false,y:'2'}};
+ const reordered={a:{y:'2',x:false},z:[{valor:2,nome:'Synthetic'},{valor:null}]};
+ assert.equal(O.iguaisJSON(a,reordered),true);
+ for(const changed of [
+  {...reordered,z:[...reordered.z].reverse()},
+  {...reordered,z:[{valor:'2',nome:'Synthetic'},{valor:null}]},
+  {...reordered,z:[{valor:2,nome:'Synthetic'},{}]},
+  {...reordered,a:{...reordered.a,added:null}},
+ ])assert.equal(O.iguaisJSON(a,changed),false);
+ assert.equal(O.iguaisJSON(undefined,null),false);
+ assert.equal(O.iguaisJSON([],{}),false);
+ assert.equal(O.iguaisJSON([null],[]),false);
+ assert.equal(O.iguaisJSON({value:undefined},{}),false);
+});

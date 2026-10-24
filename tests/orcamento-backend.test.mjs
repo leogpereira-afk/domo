@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
 import {env} from './helpers/server-env.mjs';
+import {PGlite} from '@electric-sql/pglite';
 const O=createRequire(import.meta.url)('../orcamento-model.js');
 
 const budget=(id='synthetic-budget')=>({id,obraId:'synthetic-work',origem:{totalCentavos:1000},grupos:[],servicos:[{item:'1.1',quantidade:1,custoUnitario:10,totalCentavos:1000}],revisoes:[],consolidacoes:[],validacoes:[],vinculos:[],anexos:[]});
@@ -172,4 +173,38 @@ for(const restorationFirst of [true,false])test('budget backend: automatic trash
     assert.notEqual(restored.status,200);assert.equal(result.body.lixeiraApagada,1);assert.equal(e.get('orc',b.id),undefined);
     assert.equal(e.get('_arqmeta','routine-file'),undefined);assert.equal(e.parts.has('routine-file/p0'),false);
   }
+});
+
+
+test('budget backend: PDF after JSONB reload preserves validation history and rejects real rewrites',async t=>{
+  const db=new PGlite();t.after(()=>db.close());
+  const jsonb=async r=>(await db.query('select $1::jsonb as registro',[JSON.stringify(r)])).rows[0].registro;
+  const e=await env('domo-nucleo'),b=budget('jsonb-budget');
+  b.origem={totalCentavos:1000,hash:'synthetic-hash',detalhes:{z:'last',a:'first'}};
+  b.validacoes=[{id:'synthetic-validation',item:'1.1',titulo:'Synthetic check',status:'pendente',historico:[]}];
+  const first=await save(e,b);assert.equal(first.body.salvos.length,1);
+  const ack=first.body.salvos[0],remote=await jsonb(e.get('orc',b.id));e.seed('orc',remote);
+  assert.notEqual(JSON.stringify(ack.validacoes[0].historico),JSON.stringify(remote.validacoes[0].historico));
+  e.seed('_arqmeta',{id:'synthetic-pdf',pronto:true,criadoPorId:'equipe',vinculoPendente:{colecao:'orc',registroId:b.id}});
+  const attached=await save(e,{...ack,anexos:[{arquivoId:'synthetic-pdf',mime:'application/pdf'}]});
+  assert.equal(attached.body.salvos.length,1,attached.body.recusados[0]?.motivo);
+  const confirmed=e.get('orc',b.id);assert.deepEqual(confirmed.validacoes,remote.validacoes);
+  assert.equal(confirmed.anexos[0].arquivoId,'synthetic-pdf');
+  for(const mutate of [
+    r=>{r.validacoes[0].historico[0].por='Forged';},
+    r=>{delete r.validacoes[0].historico[0].porId;},
+    r=>{r.validacoes[0].historico[0].extra=null;},
+    r=>{r.validacoes[0].historico[0].item=1.1;},
+    r=>{r.origem.totalCentavos++;},
+  ]){const changed=structuredClone(confirmed);mutate(changed);assert.equal((await save(e,changed)).body.recusados.length,1);}
+  // Same contract applies to approved events and nested original data.
+  const revised={...confirmed,revisoes:[{id:'synthetic-revision',alteracoes:[{item:'1.1',quantidade:2}],aprovadoPor:'Synthetic',aprovadoEm:'2026-01-01'}]};
+  assert.equal((await save(e,revised)).body.salvos.length,1);
+  const current=e.get('orc',b.id);current.consolidacoes=[O.criarEvento(current,'1.1','consolidado',{id:'synthetic-approval',por:'Synthetic',em:'2026-01-01',responsavel:'Synthetic',evidencia:'Synthetic sheet'})];
+  assert.equal((await save(e,current)).body.salvos.length,1);
+  const signed=e.get('orc',b.id),canonical=await jsonb(signed);e.seed('orc',canonical);
+  assert.equal((await save(e,{...signed,nome:'Synthetic annotation'})).body.salvos.length,1);
+  assert.deepEqual(e.get('orc',b.id).validacoes,canonical.validacoes);
+  const forged=structuredClone(e.get('orc',b.id));forged.consolidacoes[0].aprovadoPorId='another';
+  assert.equal((await save(e,forged)).body.recusados.length,1);
 });
