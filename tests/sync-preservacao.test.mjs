@@ -131,7 +131,7 @@ test('budget aggregate preserves original services, validations and scenarios th
   paginas:[{pagina:1,texto:'Fonte sintética '.repeat(1000)}],validacoes:[{id:'v',status:'pendente',responsavel:'',historico:[]}],cenarios:[],revisoes:[],vinculos:[],anexos:[]};
  a.S.reg.orc=[structuredClone(original)];await a.gravarCache();
  const edited={...structuredClone(original),validacoes:[{id:'v',status:'em-analise',responsavel:'QA',prazo:'2026-11-10',observacao:'Conferência sintética completa',historico:[{acao:'Edição QA'}]}],cenarios:[{id:'s',nome:'Cenário sintético',alteracoes:[{item:'test-0',quantidade:0.25,custoUnitario:1.337}]}]};
- a.salvar('orc',edited,{semSubir:true});await a.gravarCache();
+ await a.salvar('orc',edited,{semSubir:true});await a.gravarCache();
  const server=new Map(),b=make({ls,indexedDB:db,online:true,api:remoteApi(server)});await b.lerCache();
  assert.equal(b.S.fila.length,1);assert.equal(b.S.reg.orc[0].servicos.length,150);
  await b.subirFila();await b.gravarCache();
@@ -197,7 +197,8 @@ test('real budget upload uses durable IndexedDB Blob, survives daily cleanup and
    const e=opts.url?.endsWith('/arq')?acervo:nucleo,r=await e.call(action,body,'office');
    if(r.status>=400)throw Object.assign(Error(r.body.error),{status:r.status});return r.body;
  };
- const ls=remembered(storage()),db=new IDBFactory(),a=make({ls,indexedDB:db,online:true,api});a.S.reg.orc=first.body.salvos;
+ let full=false;const ls=remembered(storage({fail:()=>full}));full=true;
+ const db=new IDBFactory(),a=make({ls,indexedDB:db,online:true,api});a.S.reg.orc=first.body.salvos;
  vm.runInContext('comFila=__comFilaOriginal;enviarArquivo=__uploadOriginal',a.c);a.c.__file=new File(['synthetic document'],'qa.pdf',{type:'application/pdf'});
  const r=await vm.runInContext("anexarArquivoDuravel({file:__file,colecao:'orc',registroId:'B'})",a.c);
  assert.equal(r.pendente,true);assert.ok(r.arquivoId);let files=await vm.runInContext('filaArqListar()',a.c);assert.equal(files.length,1);assert.equal(await files[0].blob.text(),'synthetic document');
@@ -256,4 +257,129 @@ test('approved budget ACK remains canonical across cache quota, reload and retry
  const b=make({ls,online:true,api});await b.lerCache();assert.equal(b.S.reg.orc[0].consolidacoes[0].em,canonical.em);
  cacheFull=false;b.c.navigator.onLine=false;assert.equal(await b.subirFila(),true);assert.equal(sends,1);assert.equal(b.S.fila.length,0);
  assert.equal(b.S.reg.orc[0].consolidacoes.length,1);assert.equal(nucleus.get('orc',base.id).consolidacoes.length,1);
+});
+
+test('large first budget import survives full localStorage through durable IndexedDB journal and offline reload',async()=>{
+ let full=false;const ls=remembered(storage({fail:()=>full})),db=new IDBFactory();ls.setItem('other-application','preserve exact bytes');full=true;
+ const a=make({ls,indexedDB:db}),original=record('B-LARGE',{servicos:Array.from({length:146},(_,i)=>({item:String(i),descricao:'Synthetic source '.repeat(100)})),paginas:[{pagina:1,texto:'Synthetic complete page '.repeat(10000)}],anexos:[]});
+ const saved=await a.salvar('orc',original,{semSubir:true});assert.equal(saved.id,original.id);assert.equal(a.S.fila.length,1);
+ const b=make({ls,indexedDB:db});await b.lerCache();assert.equal(b.S.fila.length,1);assert.equal(b.S.reg.orc[0].paginas[0].texto,original.paginas[0].texto);assert.equal(b.S.reg.orc[0].servicos.length,146);
+ const server=new Map();b.c.navigator.onLine=true;b.c.__api=remoteApi(server);assert.equal(await b.subirFila(),true);
+ const c=make({ls,indexedDB:db});await c.lerCache();assert.equal(c.S.fila.length,0);assert.equal(c.S.reg.orc[0].paginas[0].texto,original.paginas[0].texto);assert.equal(ls.getItem('other-application'),'preserve exact bytes');
+});
+
+test('IndexedDB budget journal refuses unavailable durability before publishing edited local state',async()=>{
+ const a=make({indexedDB:new IDBFactory()});a.c.indexedDB={open(){throw Error('disk unavailable')}};
+ await assert.rejects(async()=>a.salvar('orc',record('B-FAIL'),{semSubir:true}),/guardar|armazen|disk|diário/i);assert.equal(a.S.reg.orc.length,0);assert.equal(a.S.fila.length,0);
+});
+
+test('IndexedDB budget operations from two tabs remain separate under localStorage quota',async()=>{
+ let full=false;const ls=remembered(storage({fail:()=>full})),db=new IDBFactory();full=true;
+ const a=make({ls,indexedDB:db}),b=make({ls,indexedDB:db});
+ await Promise.all([a.salvar('orc',record('B',{nota:'first tab'}),{semSubir:true}),b.salvar('orc',record('B',{nota:'second tab'}),{semSubir:true})]);
+ const c=make({ls,indexedDB:db,online:true});await c.lerCache();assert.equal(c.S.fila.length,2);let sent=0;c.c.__api=async()=>{sent++;return{salvos:[]}};await c.subirFila();assert.equal(sent,0);
+ c.S.usuarioId='another-account';await c.subirFila();assert.equal(c.S.fila.length,0);
+ const d=make({ls,indexedDB:db});await d.lerCache();assert.equal(d.S.fila.length,2);
+});
+
+test('canonical budget ACK uses IndexedDB journal when both localStorage and offline cache writes fail',async()=>{
+ let full=false;const ls=remembered(storage({fail:()=>full})),db=new IDBFactory();full=true;let sends=0;
+ const a=make({ls,indexedDB:db,online:true,api:async(action,body)=>{sends++;return{salvos:body.itens.map(x=>({...x.registro,_col:'orc',_revisao:'server-revision',consolidacoes:x.registro.consolidacoes.map(e=>({...e,em:'server-time',por:'Server actor'}))}))}}});
+ await a.salvar('orc',{id:'ACK-IDB',consolidacoes:[{id:'approval',item:'1',em:'client-time'}]},{semSubir:true});await a.gravarCache();a.c.bancoCache=async()=>{throw Error('offline cache failed')};
+ assert.equal(await a.subirFila(),false);assert.equal(a.S.fila[0].confirmado,true);assert.equal(a.S.fila[0].registro.consolidacoes[0].em,'server-time');
+ const b=make({ls,indexedDB:db});await b.lerCache();assert.equal(b.S.reg.orc[0].consolidacoes[0].em,'server-time');assert.equal(await b.subirFila(),true);assert.equal(b.S.fila.length,0);assert.equal(sends,1);
+});
+
+test('budget save during account change commits only to its captured owner and never updates the next account',async()=>{
+ const ls=remembered(storage()),db=new IDBFactory(),a=make({ls,indexedDB:db});
+ const tx=a.c.transacaoDiarioOrc;a.c.transacaoDiarioOrc=async(dono,alterar)=>{const r=await tx(dono,alterar);if(alterar){a.S.usuarioId='other';a.S.reg.orc=[];}return r;};
+ await assert.rejects(a.salvar('orc',record('PRIVATE-B'),{semSubir:true}),/acesso anterior/);
+ await a.subirFila();assert.equal(a.S.fila.length,0);assert.equal(a.S.reg.orc.length,0);
+ const b=make({ls,indexedDB:db});await b.lerCache();assert.equal(b.S.reg.orc[0].id,'PRIVATE-B');assert.equal(b.S.fila.length,1);
+});
+
+test('budget recovery cannot copy archived private versions into a newly switched account',async()=>{
+ let full=false;const ls=remembered(storage({fail:()=>full})),db=new IDBFactory();full=true;
+ const a=make({ls,indexedDB:db}),base={id:'PRIVATE-RECOVERY',_revisao:'r0',atualizadoEm:'old',nome:'before'};a.S.reg.orc=[base];
+ await a.salvar('orc',{...base,nome:'local'},{semSubir:true,baseRegistro:base});
+ a.c.__op=a.S.fila[0].op;a.c.__remote={...base,_revisao:'r1',nota:'remote addition'};
+ const tx=a.c.transacaoDiarioOrc;a.c.transacaoDiarioOrc=async(dono,alterar)=>{const r=await tx(dono,alterar);if(alterar){a.S.usuarioId='other';a.S.reg.orc=[];}return r;};
+ await assert.rejects(vm.runInContext('resolverPendenciaLocal(__op,__remote)',a.c),/sessão mudou/);
+ await a.subirFila();assert.equal(a.S.fila.length,0);assert.equal(a.S.reg.orc.length,0);
+ const b=make({ls,indexedDB:db});await b.lerCache();assert.equal(b.S.fila.length,1);assert.equal(b.S.reg.orc[0].nome,'local');
+ assert.equal(vm.runInContext('versoesLocaisPreservadas().length',b.c),2);
+});
+
+test('budget legacy localStorage journal migrates once and a stale acknowledged copy is never resent',async()=>{
+ let full=false;const ls=remembered(storage({fail:()=>full})),old=make({ls});old.salvar('orc',record('MIGRATE-B'),{semSubir:true});
+ const key='domo_fila_v2:'+old.S.fila[0].op,text=ls.getItem(key);ls.setItem('foreign-app','untouched');full=true;
+ const db=new IDBFactory(),a=make({ls,indexedDB:db,online:true,api:remoteApi()});await a.lerCache();assert.equal(a.S.fila.length,1);assert.equal(ls.getItem(key),null);
+ assert.equal(await a.subirFila(),true);full=false;ls.setItem(key,text);full=true;
+ const b=make({ls,indexedDB:db});await b.lerCache();assert.equal(b.S.fila.length,0);assert.equal(b.S.reg.orc[0].id,'MIGRATE-B');assert.equal(ls.getItem('foreign-app'),'untouched');
+});
+
+test('IndexedDB budget successor queued during request adopts canonical approval and late editor uses ACK receipt',async()=>{
+ let full=false;const ls=remembered(storage({fail:()=>full})),db=new IDBFactory();full=true;
+ let finish,started;const began=new Promise(r=>started=r);
+ const a=make({ls,indexedDB:db,online:true,api:async(action,body)=>new Promise(resolve=>{finish=()=>resolve({salvos:body.itens.map(x=>({...x.registro,_col:'orc',_revisao:'server-rev',atualizadoEm:'server',consolidacoes:x.registro.consolidacoes.map(e=>({...e,em:'server-time',por:'Server actor'}))}))});started();})});
+ const base={id:'B-IDB',_revisao:'r0',atualizadoEm:'old',consolidacoes:[]};a.S.reg.orc=[base];
+ const first=await a.salvar('orc',{...base,consolidacoes:[{id:'c1',item:'A',em:'client-time'}]},{semSubir:true,baseRegistro:base});
+ const sending=a.subirFila();await began;
+ await a.salvar('orc',{...first,consolidacoes:[...first.consolidacoes,{id:'c2',item:'B',em:'client-2'}]},{semSubir:true,baseRegistro:first});
+ finish();await sending;assert.equal(a.S.fila.length,1);assert.equal(a.S.fila[0].registro.consolidacoes[0].em,'server-time');assert.equal(a.S.fila[0].registro.consolidacoes[1].id,'c2');assert.equal(a.S.fila[0].registro._baseRevisao,'server-rev');
+ // An editor still holding the first client snapshot can save after its ACK.
+ const other=make({ls,indexedDB:db});await other.lerCache();
+ await other.salvar('orc',{...first,observacao:'late independent change'},{semSubir:true,baseRegistro:first});
+ const late=other.S.fila.find(f=>f.registro.observacao);assert.equal(late.registro.consolidacoes[0].em,'server-time');assert.equal(late.registro._baseRevisao,'server-rev');
+});
+
+test('temporary budget journal failure never prevents sending unrelated localStorage records',async()=>{
+ let sends=0;const a=make({indexedDB:new IDBFactory(),online:true,api:async(action,body)=>{sends++;return remoteApi()(action,body)}});
+ a.salvar('forn',record('GENERIC'),{semSubir:true});await a.gravarCache();a.c.indexedDB={open(){throw Error('temporarily unavailable')}};
+ await a.subirFila();assert.equal(sends,1);assert.equal(a.S.fila[0].confirmado,true);
+});
+
+test('recovered budget journal read clears only its own temporary error and resumes queued data',async()=>{
+ const ls=remembered(storage()),db=new IDBFactory(),a=make({ls,indexedDB:db});await a.salvar('orc',record('RESUME'),{semSubir:true});
+ const b=make({ls,indexedDB:{open(){throw Error('unavailable')}},online:true,api:remoteApi()});await b.lerCache();assert.match(b.S.erroFila,/diário/);
+ b.c.indexedDB=db;assert.equal(await b.subirFila(),true);assert.equal(b.S.erroFila,'');
+ b.S.erroFila='Fila antiga ilegível';await b.c.carregarDiarioOrcamento();assert.equal(b.S.erroFila,'Fila antiga ilegível');
+});
+
+test('failed IndexedDB ACK commit is reconciled after restart without replaying a signed budget approval',async()=>{
+ const nucleus=await env('domo-nucleo'),db=new IDBFactory();let full=false;const ls=remembered(storage({fail:()=>full}));full=true;
+ const original={id:'ACK-TRANSACTION',obraId:'synthetic',origem:{totalCentavos:100},servicos:[{item:'1',quantidade:1,custoUnitario:1,totalCentavos:100}],validacoes:[],cenarios:[],revisoes:[],consolidacoes:[],vinculos:[],anexos:[]};
+ const initial=await nucleus.call('salvarLote',{protocoloEnvio:2,itens:[{colecao:'orc',registro:original}]});let writes=0;
+ const api=async(action,body)=>{if(action==='salvarLote')writes++;return(await nucleus.call(action,body)).body;};
+ const a=make({ls,indexedDB:db,online:true,api});a.S.reg.orc=initial.body.salvos;vm.runInContext(fs.readFileSync(new URL('orcamento-model.js',root),'utf8'),a.c);
+ const base=a.S.reg.orc[0];a.c.__base=base;const event=vm.runInContext("Orcamento.criarEvento(__base,'1','consolidado',{id:'approval',por:'Client actor',em:'2000-01-01',responsavel:'QA',evidencia:'Synthetic sheet'})",a.c);
+ await a.salvar('orc',{...base,consolidacoes:[event]},{semSubir:true,baseRegistro:base});await a.gravarCache();
+ a.c.confirmarOperacaoOrc=async()=>{throw Error('ACK disk failure')};assert.equal(await a.subirFila(),false);assert.equal(writes,1);
+ const b=make({ls,indexedDB:db,online:true,api});await b.lerCache();assert.equal(await b.subirFila(),true);assert.equal(writes,1);assert.equal(b.S.fila.length,0);
+ assert.equal(b.S.reg.orc[0].consolidacoes[0].em,nucleus.get('orc',base.id).consolidacoes[0].em);assert.notEqual(b.S.reg.orc[0].consolidacoes[0].em,'2000-01-01');
+});
+
+test('uncertain budget upload retries only after authenticated snapshot proves its original base unchanged',async()=>{
+ const nucleus=await env('domo-nucleo'),db=new IDBFactory(),ls=remembered(storage());
+ const budget={id:'RETRY-UNCHANGED',obraId:'synthetic',origem:{totalCentavos:100},servicos:[{item:'1',quantidade:1,custoUnitario:1,totalCentavos:100}],validacoes:[],cenarios:[],revisoes:[],consolidacoes:[],vinculos:[],anexos:[]};
+ let fail=true,writes=0,reads=0;const api=async(action,body)=>{if(action==='salvarLote'){writes++;if(fail)throw Error('network before server');}if(action==='snapshot')reads++;return(await nucleus.call(action,body)).body;};
+ const a=make({ls,indexedDB:db,online:true,api});await a.salvar('orc',budget,{semSubir:true});assert.equal(await a.subirFila(),false);assert.equal(writes,1);
+ fail=false;const b=make({ls,indexedDB:db,online:true,api});await b.lerCache();assert.equal(await b.subirFila(),true);assert.equal(reads,1);assert.equal(writes,2);assert.equal(b.S.fila.length,0);assert.equal(nucleus.get('orc',budget.id)._operacaoEnvio, b.S.reg.orc[0]._operacaoEnvio);
+});
+
+test('uncertain budget ACK with another remote operation preserves both versions for review without resending',async()=>{
+ const nucleus=await env('domo-nucleo'),db=new IDBFactory(),ls=remembered(storage());
+ const budget={id:'ACK-OTHER',obraId:'synthetic',origem:{totalCentavos:100},servicos:[{item:'1',quantidade:1,custoUnitario:1,totalCentavos:100}],validacoes:[],cenarios:[],revisoes:[],consolidacoes:[],vinculos:[],anexos:[]};
+ let writes=0;const api=async(action,body)=>{if(action==='salvarLote')writes++;return(await nucleus.call(action,body)).body;};
+ const a=make({ls,indexedDB:db,online:true,api});await a.salvar('orc',budget,{semSubir:true});a.c.confirmarOperacaoOrc=async()=>{throw Error('ACK disk failure')};assert.equal(await a.subirFila(),false);
+ const remote=nucleus.get('orc',budget.id),other={...remote,_baseExistente:true,_baseRevisao:remote._revisao,_baseAtualizadoEm:remote.atualizadoEm,_operacaoEnvio:'other-operation',observacao:'remote independent change'};
+ assert.equal((await nucleus.call('salvarLote',{protocoloEnvio:2,itens:[{colecao:'orc',registro:other}]})).body.recusados.length,0);
+ const b=make({ls,indexedDB:db,online:true,api});await b.lerCache();assert.equal(await b.subirFila(),false);assert.equal(writes,1);assert.equal(b.S.fila.length,1);assert.match(b.S.fila[0].recusado,/versão do servidor mudou/i);assert.equal(vm.runInContext('versoesLocaisPreservadas().length',b.c),2);assert.equal(nucleus.get('orc',budget.id).observacao,'remote independent change');
+});
+
+test('aborted budget IndexedDB transaction preserves predecessor and never reports the replacement saved',async()=>{
+ const db=new IDBFactory(),ls=remembered(storage()),a=make({ls,indexedDB:db});const first=await a.salvar('orc',record('ABORT',{nota:'original'}),{semSubir:true});
+ const tx=a.c.transacaoDiarioOrc;a.c.transacaoDiarioOrc=(dono,alterar)=>tx(dono,alterar?(mapa,put,del)=>{alterar(mapa,put,del);throw Error('abort after put');}:null);
+ await assert.rejects(a.salvar('orc',{...first,nota:'replacement'},{semSubir:true}),/abort after put/);assert.equal(a.S.reg.orc[0].nota,'original');
+ const b=make({ls,indexedDB:db});await b.lerCache();assert.equal(b.S.fila.length,1);assert.equal(b.S.reg.orc[0].nota,'original');
 });

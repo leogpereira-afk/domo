@@ -368,12 +368,16 @@ async function mostrarPendenciasLocais() {
           '<p><a href="#/orcamento/validacoes/'+encodeURIComponent(f.registro.id)+'" data-revisar-orc>Revisar este orçamento</a></p><p data-erro-orc role="alert"></p>' + mostrar(merge.registro);
         abrirModal({titulo:'Consolidar alterações do orçamento',corpo,acoes:[
           {texto:'Voltar',aoClicar:fundo=>fecharEste(fundo)},
-          ...(!revisaoFinanceira ? [{texto:'Consolidar e reenviar',classe:'primario',aoClicar:fundo=>{
+          ...(!revisaoFinanceira ? [{texto:'Consolidar e reenviar',classe:'primario',aoClicar:async fundo=>{
+            if (fundo.dataset.salvandoOrc === '1') return;
+            fundo.dataset.salvandoOrc = '1';
+            fundo.inert = true;
             try {
               if(donoFila()!==dono)throw new Error('A sessão mudou. Abra as pendências novamente.');
               fundo.querySelectorAll('[data-conflito-orc]').forEach(select=>{if(select.value)escolhas[conflitos[Number(select.dataset.conflitoOrc)].caminho]=select.value;});
-              resolverPendenciaLocal(f.op,atual,escolhas);fecharEste(fundo);fecharModal();render();toast('Alterações consolidadas e preservadas para envio.');
+              await resolverPendenciaLocal(f.op,atual,escolhas);fecharEste(fundo);fecharModal();render();toast('Alterações consolidadas e preservadas para envio.');
             } catch(e) { fundo.querySelector('[data-erro-orc]').textContent=e.message; }
+            finally { fundo.dataset.salvandoOrc = ''; fundo.inert = false; }
           }}] : [])
         ]});
         document.querySelector('[data-revisar-orc]')?.addEventListener('click',()=>{fecharModal();fecharModal();});

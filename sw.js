@@ -1,10 +1,10 @@
 /* Service worker — deixa o app abrir sem internet (a obra costuma ter sinal ruim).
    Regra do kit: SUBIR o número do CACHE a cada publicação, senão o navegador
    continua servindo o arquivo velho. */
-const CACHE = 'domo-shell-v66';
+const CACHE = 'domo-shell-v67';
 const ARQUIVOS = [
   './', './index.html', './styles.css', './config.js', './store.js', './ui.js',
-  './orcamento-model.js', './orcamento-pdf.js', './orcamento.js', './orcamento.css', './pdf.js', './compras.js', './acervo.js', './cotacao.js', './cronograma.js', './qualificacao.js', './compromissos.js', './servicos.js', './rh.js', './permutas.js', './drive.js', './app.js?v=66',
+  './orcamento-model.js', './orcamento-pdf.js', './orcamento.js', './orcamento.css', './pdf.js', './compras.js', './acervo.js', './cotacao.js', './cronograma.js', './qualificacao.js', './compromissos.js', './servicos.js', './rh.js', './permutas.js', './drive.js', './app.js?v=67',
   './libs/jspdf.umd.min.js', './logo-diamond.png', './logo-domo.png', './logo-domo-branco.png',
   './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'
 ];

@@ -22,7 +22,7 @@ function ui() {
   let source=fs.readFileSync(new URL('../orcamento.js',import.meta.url),'utf8');
   // Expose lexical helpers only inside this VM; production has no test API.
   source=source.replace('window.renderizarOrcamento=renderizarOrcamento;',
-    'window.testUI={activeWorks,prepareImport,attachmentMeta,pdfAttachmentId,filtered,bindFilters,st,priorityQueue,geral,save,statusSave,itemForm,linkForm,scenarioSnapshot,scenarios};window.setTestModal=f=>{modal=f;};window.renderizarOrcamento=renderizarOrcamento;');
+    'window.testUI={activeWorks,prepareImport,attachmentMeta,pdfAttachmentId,filtered,bindFilters,st,priorityQueue,geral,save,statusSave,itemForm,linkForm,scenarioSnapshot,scenarios,modal,importFile};window.setTestModal=f=>{modal=f;};window.renderizarOrcamento=renderizarOrcamento;');
   vm.runInContext(source,context);
   return {context,api:context.window.testUI};
 }
@@ -105,13 +105,64 @@ test('UI queue prioritizes an explicit blocker before greater cost and does not 
  const queue=api.priorityQueue(o);assert.equal(queue.length,2);assert.equal(queue[0].item,'01.02');assert.ok(queue[0].blocks.length);assert.equal(queue[1].state.consolidado,false);
 });
 
-test('UI retains open edit on conflict and saves independent changes against the current record',()=>{
+test('UI retains open edit on conflict and saves independent changes against the current record',async()=>{
  const {context,api}=ui(),o={...budget(),id:'qa-budget',obraId:'one',validacoes:[]};
- let writes=0,base;context.achar=()=>o;context.toast=()=>{};context.salvar=(col,next,opts)=>{writes++;base=opts.baseRegistro;return next;};
+ let writes=0,base;context.achar=()=>o;context.toast=()=>{};context.salvarOrcamento=async(next,opts)=>{writes++;base=opts.baseRegistro;return next;};
  context.consolidarEdicaoOrcamento=()=>({registro:o,conflitos:[{caminho:'nome',local:'A',remoto:'B'}]});
- assert.throws(()=>api.save(o,{...o,nome:'A'}),/mesmo campo/);assert.equal(writes,0);
+ await assert.rejects(()=>api.save(o,{...o,nome:'A'}),/mesmo campo/);assert.equal(writes,0);
  context.consolidarEdicaoOrcamento=(base,local)=>({registro:local,conflitos:[]});
- api.save(o,{...o,nome:'A'});assert.equal(writes,1);assert.equal(base,o);
+ await api.save(o,{...o,nome:'A'});assert.equal(writes,1);assert.equal(base,o);
+});
+
+// Execute the production modal/submit handler; this tiny DOM double only supplies its controls.
+function modalDOM(context){
+ const input={name:'nome',value:'Nome completo ainda no formulário',type:'text',focus(){}},submitButton={disabled:false},closeButton={},error={textContent:''},status={textContent:'',after(){}},conflicts={innerHTML:''};
+ const form={elements:[input],inert:false,querySelector(selector){return ({'.ob-draft-state':status,'.ob-error':error,'.ob-conflicts':conflicts,'button[type=submit]':submitButton})[selector]||input;},
+   querySelectorAll(selector){return selector==='button[type=submit]'?[submitButton]:selector==='input,select,textarea,button[type=submit]'?[input,submitButton]:[];}};
+ const state={closed:false,renders:0,toasts:[],removed:0,writes:0};
+ const layer={querySelector:selector=>selector==='form'?form:closeButton,addEventListener(){},remove(){state.closed=true;}};
+ context.document={createElement:()=>layer,body:{append(){}},activeElement:input};
+ context.FormData=class extends Map{constructor(f){super(f.elements.map(x=>[x.name,x.value]));}};
+ context.render=()=>{state.renders++;};context.toast=(...args)=>state.toasts.push(args);
+ context.lerRascunhoOrcamento=async()=>null;
+ context.gravarRascunhoOrcamento=async()=>{state.writes++;};
+ context.removerRascunhoOrcamento=async()=>{state.removed++;};
+ return {form,input,submitButton,closeButton,error,state};
+}
+const tick=()=>new Promise(resolve=>setImmediate(resolve));
+
+test('production budget modal waits for durable commit before discarding draft, closing or reporting success',async()=>{
+ const {context,api}=ui(),o={...budget(),id:'qa-budget',obraId:'one',validacoes:[]},d=modalDOM(context);
+ let finish,started=false;
+ context.achar=()=>o;context.salvarOrcamento=next=>{started=true;return new Promise(resolve=>{finish=()=>resolve(next);});};
+ api.modal('Editar orçamento','',f=>api.save(o,{...o,nome:f.get('nome')}),null,null,{draft:{chave:'qa-draft'}});
+ await tick();
+ const running=d.form.onsubmit({preventDefault(){}});await tick();
+ assert.equal(started,true);assert.equal(d.form.inert,true);assert.equal(d.submitButton.disabled,true);
+ assert.equal(d.state.closed,false);assert.equal(d.state.removed,0);assert.equal(d.state.toasts.length,0);assert.equal(d.state.renders,0);
+ await d.closeButton.onclick();assert.equal(d.state.closed,false);
+ finish();await running;
+ assert.equal(d.state.closed,true);assert.equal(d.state.removed,1);assert.equal(d.state.toasts.length,1);assert.equal(d.state.renders,1);
+});
+
+test('production budget modal keeps all fields and draft after durable storage rejection',async()=>{
+ const {context,api}=ui(),o={...budget(),id:'qa-budget',obraId:'one',validacoes:[]},d=modalDOM(context);
+ let reject;context.achar=()=>o;context.salvarOrcamento=()=>new Promise((resolve,no)=>{reject=no;});
+ api.modal('Editar orçamento','',f=>api.save(o,{...o,nome:f.get('nome')}),null,null,{draft:{chave:'qa-draft'}});
+ await tick();const running=d.form.onsubmit({preventDefault(){}});await tick();
+ reject(Error('Não foi possível preservar o diário: disco sem espaço'));await running;
+ assert.equal(d.state.closed,false);assert.equal(d.state.removed,0);assert.equal(d.state.renders,0);assert.equal(d.state.toasts.length,0);
+ assert.equal(d.input.value,'Nome completo ainda no formulário');assert.match(d.error.textContent,/disco sem espaço/);
+ assert.equal(d.form.inert,false);assert.equal(d.submitButton.disabled,false);assert.ok(d.state.writes>0);
+});
+
+test('private import awaits durable save before selecting the imported budget',async()=>{
+ const {context,api}=ui();let callback,finish;
+ context.window.setTestModal((title,html,submit)=>{callback=submit;return {};});
+ context.salvarOrcamento=()=>new Promise(resolve=>{finish=resolve;});
+ await api.importFile({text:async()=>JSON.stringify(budget())});
+ const saving=callback(new Map([['obraId','one']]));await tick();
+ assert.equal(api.st.id,'');finish();await saving;assert.equal(api.st.id,'orc-one-synthetic-hash');
 });
 
 

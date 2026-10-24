@@ -143,6 +143,133 @@ function donoFila() {
   return 'equipe:' + impressaoLocal(S.senhaHash + '|' + S.quem);
 }
 function novaOperacao() { return crypto.randomUUID(); }
+// O diário grande do orçamento não disputa a quota de localStorage com os
+// demais apps do mesmo domínio. Uma transação mantém operações e recibos por
+// acesso; a memória abaixo é somente uma projeção para a interface síncrona.
+const DB_DIARIO_ORC = 'domo_orcamento_diario';
+const ERRO_DIARIO_ORC='Não foi possível ler o diário do orçamento. Os dados foram preservados; tente novamente.';
+const diarioOrc = new Map();
+const temDiarioOrc = () => typeof indexedDB !== 'undefined' && !!indexedDB;
+const chaveAckOrc=(dono,id)=>'ack:'+encodeURIComponent(dono)+':'+id;
+function transacaoDiarioOrc(dono, alterar) {
+  return new Promise((resolve,reject) => {
+    let erro, resultado, linhas=[];
+    const req=indexedDB.open(DB_DIARIO_ORC,1);
+    req.onupgradeneeded=()=>req.result.createObjectStore('entradas',{keyPath:'chave'}).createIndex('dono','dono');
+    req.onerror=()=>reject(req.error);
+    req.onblocked=()=>reject(new Error('Diário do orçamento ocupado por outra aba.'));
+    req.onsuccess=()=>{
+      const db=req.result,tx=db.transaction('entradas',alterar?'readwrite':'readonly'),st=tx.objectStore('entradas');
+      const leitura=st.index('dono').getAll(dono);
+      leitura.onsuccess=()=>{
+        try {
+          const mapa=new Map(leitura.result.map(e=>[e.chave,e]));
+          const put=(chave,tipo,valor)=>{const e={chave,dono,tipo,valor:structuredClone(valor)};st.put(e);mapa.set(chave,e);};
+          const del=chave=>{st.delete(chave);mapa.delete(chave);};
+          resultado=alterar?.(mapa,put,del);linhas=[...mapa.values()];
+        }catch(e){erro=e;tx.abort();}
+      };
+      tx.oncomplete=()=>{
+        db.close();
+        // Não devolve conteúdo privado à sessão que entrou durante o commit.
+        if(donoFila()===dono){for(const [k,e] of diarioOrc)if(e.dono===dono)diarioOrc.delete(k);for(const e of linhas)diarioOrc.set(e.chave,e);}
+        resolve(resultado);
+      };
+      tx.onerror=tx.onabort=()=>{db.close();reject(erro||tx.error||new Error('Não foi possível guardar o diário do orçamento. Mantenha o formulário aberto.'));};
+    };
+  });
+}
+function operacaoLocal(op) {
+  const entry=diarioOrc.get(chaveOperacao(op));
+  if(entry?.dono===donoFila())return structuredClone(entry.valor);
+  try{return JSON.parse(localStorage.getItem(chaveOperacao(op))||'null');}catch{return null;}
+}
+async function carregarDiarioOrcamento(dono=donoFila()) {
+  if(!temDiarioOrc()||!dono)return;
+  const antigas=[];
+  for(let i=0;i<localStorage.length;i++){
+    const chave=localStorage.key(i);if(!chave?.startsWith(PREFIXO_FILA))continue;
+    const texto=localStorage.getItem(chave);
+    try{const f=JSON.parse(texto);if(f?.colecao==='orc'&&f.dono===dono)antigas.push({chave,texto,f});}catch{/* a leitura legada sinaliza dados ilegíveis */}
+  }
+  await transacaoDiarioOrc(dono,antigas.length?(mapa,put)=>{
+    for(const {chave,f} of antigas)if(!mapa.has(chave)&&mapa.get(chaveAckOrc(dono,f.registro.id))?.valor.op!==f.op)put(chave,'operacao',f);
+  }:null);
+  // Só remove uma representação legada depois do commit, sem tocar outros apps.
+  for(const {chave,texto} of antigas)if(localStorage.getItem(chave)===texto)localStorage.removeItem(chave);
+  if(donoFila()===dono){if(S.erroFila===ERRO_DIARIO_ORC)S.erroFila='';atualizarFila();}
+}
+async function conferirDiarioParaEnvio(dono=donoFila()) {
+  try{await carregarDiarioOrcamento(dono);return true;}
+  catch{if(donoFila()===dono&&(!S.erroFila||S.erroFila===ERRO_DIARIO_ORC))S.erroFila=ERRO_DIARIO_ORC;return false;}
+}
+async function persistirOperacao(f,exigirExistente=false) {
+  if(f.colecao!=='orc'||!temDiarioOrc()){
+    if(!exigirExistente||localStorage.getItem(chaveOperacao(f.op)))gravarOperacao(f);
+    return;
+  }
+  await transacaoDiarioOrc(f.dono,(mapa,put)=>{const chave=chaveOperacao(f.op);if(!exigirExistente||mapa.has(chave))put(chave,'operacao',f);});
+}
+async function removerOperacoes(operacoes) {
+  const orc=operacoes.filter(f=>f.colecao==='orc'&&temDiarioOrc());
+  for(const dono of new Set(orc.map(f=>f.dono)))await transacaoDiarioOrc(dono,(_mapa,_put,del)=>{for(const f of orc.filter(f=>f.dono===dono))del(chaveOperacao(f.op));});
+  for(const f of operacoes)localStorage.removeItem(chaveOperacao(f.op));
+}
+async function confirmarOperacaoOrc(f,confirmado,salvo) {
+  await transacaoDiarioOrc(f.dono,(mapa,put,del)=>{
+    for(const e of mapa.values()){
+      if(e.tipo!=='operacao')continue;
+      const proxima=e.valor;
+      if(!(proxima.ancestrais||[]).includes(f.op)||proxima.registro._baseRevisao!==f.registro._baseRevisao||proxima.registro._baseAtualizadoEm!==f.registro._baseAtualizadoEm)continue;
+      if(salvo){
+        const canonico=consolidarEdicaoOrcamento(f.registro,proxima.registro,salvo);
+        if(canonico.conflitos.length){put(e.chave,'operacao',{...proxima,recusado:'O servidor confirmou a versão anterior, mas há campos que precisam de conferência antes do próximo envio.'});continue;}
+        proxima.registro={...canonico.registro,_opLocal:proxima.op,_pendente:true,_recusado:null};proxima.baseRegistro=structuredClone(salvo);
+      }
+      Object.assign(proxima.registro,{_baseExistente:true,_baseRevisao:confirmado._revisao||null,_baseAtualizadoEm:confirmado.atualizadoEm||null});put(e.chave,'operacao',proxima);
+    }
+    const canonico=salvo||{id:f.registro.id};
+    if(mapa.has(chaveOperacao(f.op)))put(chaveOperacao(f.op),'operacao',{...f,confirmado:true,confirmadoSemLeitura:!salvo,recusado:null,baseRegistro:undefined,
+      registro:{...canonico,_baseExistente:true,_baseRevisao:confirmado._revisao||null,_baseAtualizadoEm:confirmado.atualizadoEm||null}});
+    // Um recibo por orçamento permite que um editor aberto antes do ACK adote
+    // seus carimbos, mesmo quando o diário já foi liberado após o cache.
+    put(chaveAckOrc(f.dono,f.registro.id),'ack',{op:f.op,enviado:f.registro,registro:salvo||null});
+    del('envio:'+f.op);
+  });
+}
+async function registrarEnviosOrc(operacoes,dono) {
+  if(!operacoes.length)return;
+  await transacaoDiarioOrc(dono,(_mapa,put)=>{for(const f of operacoes)put('envio:'+f.op,'envio',f);});
+}
+async function reconciliarEnviosOrc(dono) {
+  const envios=[...diarioOrc.values()].filter(e=>e.dono===dono&&e.tipo==='envio').map(e=>e.valor);
+  if(!envios.length)return true;
+  if(!navigator.onLine)return false;
+  // Não repetir uma intenção cujo servidor pode ter confirmado enquanto a
+  // transação local do ACK falhou. A identidade do envio é exata, não inferida
+  // por valores iguais nem por relógio do cliente.
+  const resposta=await api('snapshot',{colecoes:['orc']});
+  if(donoFila()!==dono)return false;
+  for(const f of envios){
+    const remoto=(resposta.registros||[]).find(r=>r._col==='orc'&&r.id===f.registro.id);
+    if(remoto?._operacaoEnvio===f.op){await confirmarOperacaoOrc(f,remoto,remoto);continue;}
+    const mesmaBase=remoto
+      ? remoto._revisao ? remoto._revisao===f.registro._baseRevisao : (remoto.atualizadoEm||null)===(f.registro._baseAtualizadoEm||null)
+      : f.registro._baseExistente===false;
+    await transacaoDiarioOrc(dono,(mapa,put,del)=>{
+      if(!mesmaBase){
+        // Outra alteração venceu: preservar a intenção e os dois retratos para
+        // revisão, sem reaplicar o prefixo anterior contra um histórico assinado.
+        for(const e of mapa.values())if(e.tipo==='operacao'&&(e.valor.op===f.op||(e.valor.ancestrais||[]).includes(f.op)))put(e.chave,'operacao',{...e.valor,recusado:'A versão do servidor mudou durante um envio sem confirmação local. Confira as versões em Pendências.'});
+        put(PREFIXO_RECUPERACAO+f.op,'versao',f);
+        if(remoto)put(PREFIXO_RECUPERACAO+'servidor-'+f.op,'versao',{op:'servidor-'+f.op,dono,colecao:'orc',origem:'servidor',registro:remoto});
+      }
+      del('envio:'+f.op);
+    });
+  }
+  if(donoFila()!==dono)return false;
+  restaurarPendencias();return true;
+}
 function gravarOperacao(f) {
   const chave = chaveOperacao(f.op);
   const texto = JSON.stringify(f);
@@ -158,14 +285,14 @@ function gravarOperacao(f) {
 }
 function atualizarFila() {
   const dono = donoFila();
-  const fila = [];
+  const fila = [...diarioOrc.values()].filter(e=>e.dono===dono&&e.tipo==='operacao').map(e=>structuredClone(e.valor));
   // Guardar primeiro a lista de chaves evita índices deslocados por outra aba.
   const chaves = [];
   for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith(PREFIXO_FILA)) chaves.push(k); }
   for (const k of chaves) {
     const texto = localStorage.getItem(k);
     if (!texto) continue;
-    try { const f = JSON.parse(texto); if (f.dono === dono && f.registro && f.op) fila.push(f); }
+    try { const f = JSON.parse(texto); if (f.dono === dono && f.registro && f.op && !fila.some(x=>x.op===f.op)) fila.push(f); }
     catch { S.erroFila = 'Há uma pendência local ilegível. Preserve os dados deste aparelho e solicite recuperação.'; }
   }
   fila.sort((a, b) => String(a.em || '').localeCompare(String(b.em || '')) || a.op.localeCompare(b.op));
@@ -275,6 +402,7 @@ function lerCache() {
       if (donoFila() !== dono || S.senhaHash !== senha) return;
       S.erroCache = '';
     } catch { if (donoFila() === dono) S.erroCache = 'Cópia offline não atualizada. Os dados anteriores foram preservados; conecte para conferir.'; }
+    await conferirDiarioParaEnvio(dono);
     if (donoFila() === dono && S.senhaHash === senha) pendencias();
   })();
 }
@@ -304,7 +432,7 @@ function gravarCache() {
   return cacheEmGravacao;
 }
 // Compatibilidade com a inicialização/testes antigos: nunca substitui a fila.
-function gravarFila() { for (const f of S.fila) gravarOperacao(f); return true; }
+function gravarFila() { return Promise.all(S.fila.map(f=>persistirOperacao(f))); }
 
 /* ── Consultas ─────────────────────────────────────────────────────────────── */
 // Lista de uma coleção já sem a lixeira e com o mais novo em cima.
@@ -432,7 +560,7 @@ function consolidarEdicaoOrcamento(base, local, remoto = achar('orc', local.id),
 
 /* ── Gravação ──────────────────────────────────────────────────────────────── */
 // Salva no aparelho na hora e empurra pra fila. Devolve o registro local.
-function salvar(col, registro, opts = {}) {
+function prepararSalvamento(col, registro, opts = {}, consultar=operacaoLocal) {
   const id = registro.id || novaOperacao();
   const anterior = achar(col, id);
   const op = novaOperacao();
@@ -463,11 +591,11 @@ function salvar(col, registro, opts = {}) {
   const baseOp = registro._opLocal;
   const substitui = opts.substitui || (baseOp ? [baseOp] : []);
   const ancestrais = new Set(substitui);
-  for (const antiga of substitui) { try { const f = JSON.parse(localStorage.getItem(chaveOperacao(antiga))); for (const id of (f && f.ancestrais || [])) ancestrais.add(id); } catch { /* origem continua preservada */ } }
+  for (const antiga of substitui) { const f=consultar(antiga);for (const id of (f && f.ancestrais || [])) ancestrais.add(id); }
   const f = { op, dono, em: local.atualizadoEm, colecao: col, registro: local, seq: ++S.seqFila, substitui, ancestrais: [...ancestrais] };
   if (col === 'orc') {
     let origem;
-    try { origem = baseOp && JSON.parse(localStorage.getItem(chaveOperacao(baseOp)) || 'null'); } catch { /* conserva base explícita */ }
+    origem=baseOp&&consultar(baseOp);
     if (opts.substitui && Object.hasOwn(opts, 'baseRegistro')) f.baseRegistro = structuredClone(opts.baseRegistro);
     else if (origem?.confirmado) f.baseRegistro = structuredClone(origem.registro);
     else if (origem && Object.hasOwn(origem, 'baseRegistro')) f.baseRegistro = origem.baseRegistro;
@@ -475,9 +603,11 @@ function salvar(col, registro, opts = {}) {
     else if (!baseOp && anterior && !anterior._pendente && !anterior._recusado) f.baseRegistro = structuredClone(anterior);
     else if (!anterior) f.baseRegistro = null;
   }
-  gravarOperacao(f);
-  // Só limpar versões substituídas depois de gravar o sucessor completo.
-  for (const antiga of substitui) localStorage.removeItem(chaveOperacao(antiga));
+  return {f,local,col,opts};
+}
+function concluirSalvamento({f,local,col,opts}) {
+  if(donoFila()!==f.dono)throw new Error('O orçamento foi preservado no acesso anterior. Entre novamente nesse acesso para continuar.');
+  const id=local.id;
   const arr = S.reg[col] || (S.reg[col] = []);
   const i = arr.findIndex(r => r.id === id);
   if (i >= 0) arr[i] = local; else arr.unshift(local);
@@ -487,12 +617,44 @@ function salvar(col, registro, opts = {}) {
   if (!opts.semSubir) subirFila();
   return local;
 }
+function salvar(col, registro, opts = {}) {
+  if(col==='orc'&&temDiarioOrc())return salvarOrcamento(registro,opts);
+  const preparado=prepararSalvamento(col,registro,opts),{f}=preparado;
+  gravarOperacao(f);
+  // Só limpar versões substituídas depois de gravar o sucessor completo.
+  for (const antiga of f.substitui) localStorage.removeItem(chaveOperacao(antiga));
+  return concluirSalvamento(preparado);
+}
+async function salvarOrcamento(registro,opts={}) {
+  if(!temDiarioOrc())return salvar('orc',registro,opts);
+  const dono=donoFila();if(!dono)throw new Error('Entre novamente antes de salvar. O formulário continua aberto.');
+  // Captura a intenção antes do primeiro await: o formulário ainda pode mudar.
+  let copia=structuredClone(registro),opcoes=structuredClone(opts);
+  await carregarDiarioOrcamento(dono);
+  let preparado;
+  await transacaoDiarioOrc(dono,(mapa,put,del)=>{
+    if(donoFila()!==dono)throw new Error('A sessão mudou. O formulário não foi salvo no novo acesso.');
+    const recibo=mapa.get(chaveAckOrc(dono,copia.id))?.valor;
+    if(copia._opLocal&&recibo?.op===copia._opLocal&&recibo.registro){
+      const merge=consolidarEdicaoOrcamento(recibo.enviado,copia,recibo.registro);
+      if(merge.conflitos.length){const erro=new Error('Há alterações para conferir antes de salvar.');erro.conflitos=merge.conflitos;throw erro;}
+      copia={...merge.registro,_baseExistente:true,_baseRevisao:recibo.registro._revisao||null,_baseAtualizadoEm:recibo.registro.atualizadoEm||null};
+      opcoes.baseRegistro=structuredClone(recibo.registro);
+    }
+    preparado=prepararSalvamento('orc',copia,opcoes,op=>mapa.get(chaveOperacao(op))?.valor||null);
+    put(chaveOperacao(preparado.f.op),'operacao',preparado.f);
+    for(const op of preparado.f.substitui)del(chaveOperacao(op));
+  });
+  const salvo=concluirSalvamento(preparado);
+  avisarDiarioOrc();
+  return salvo;
+}
 
 // Uma escolha explícita conserva as versões anteriores para baixar/consultar.
 // Não há exclusão silenciosa quando duas abas editaram o mesmo registro.
 const PREFIXO_RECUPERACAO = 'domo_recuperacao_v2:';
 function versoesLocaisPreservadas() {
-  const itens = [];
+  const itens = [...diarioOrc.values()].filter(e=>e.dono===donoFila()&&e.tipo==='versao').map(e=>structuredClone(e.valor));
   for (let i = 0; i < localStorage.length; i++) {
     const k = localStorage.key(i);
     if (!k || !k.startsWith(PREFIXO_RECUPERACAO)) continue;
@@ -517,6 +679,7 @@ function resolverPendenciaLocal(op, baseConfirmada, escolhas = {}) {
   atualizarFila();
   const escolhida = S.fila.find(f => f.op === op);
   if (!escolhida) throw new Error('Essa versão já foi atualizada. Abra Pendências novamente.');
+  if(escolhida.colecao==='orc'&&temDiarioOrc())return resolverPendenciaOrcamentoDuravel(op,baseConfirmada,escolhas);
   const versoes = S.fila.filter(f => f.colecao === escolhida.colecao && f.registro.id === escolhida.registro.id);
   try {
     for (const f of versoes) localStorage.setItem(PREFIXO_RECUPERACAO + f.op, JSON.stringify(f));
@@ -542,6 +705,21 @@ function resolverPendenciaLocal(op, baseConfirmada, escolhas = {}) {
   }
   return salvar(escolhida.colecao, registro, { substitui: versoes.map(f => f.op), ...(escolhida.colecao === 'orc' ? {baseRegistro:baseConfirmada} : {}) });
 }
+async function resolverPendenciaOrcamentoDuravel(op,baseConfirmada,escolhas) {
+  const dono=donoFila();await carregarDiarioOrcamento(dono);
+  if(donoFila()!==dono)throw new Error('A sessão mudou. Abra as pendências novamente.');
+  const escolhida=S.fila.find(f=>f.op===op);if(!escolhida)throw new Error('Essa versão já foi atualizada. Abra Pendências novamente.');
+  const versoes=S.fila.filter(f=>f.colecao==='orc'&&f.registro.id===escolhida.registro.id);
+  const resultado=consolidarPendenciaOrcamento(op,baseConfirmada,escolhas);
+  if(resultado.conflitos.length)throw new Error('Há alterações no mesmo campo. Escolha cada conflito antes de reenviar.');
+  await transacaoDiarioOrc(dono,(_mapa,put)=>{
+    for(const f of versoes)put(PREFIXO_RECUPERACAO+f.op,'versao',f);
+    if(baseConfirmada){const opServidor='servidor-'+op+'-'+impressaoLocal(JSON.stringify(baseConfirmada));put(PREFIXO_RECUPERACAO+opServidor,'versao',{op:opServidor,dono,colecao:'orc',origem:'servidor',em:new Date().toISOString(),registro:baseConfirmada});}
+  });
+  if(donoFila()!==dono)throw new Error('A sessão mudou. As versões foram preservadas no acesso anterior.');
+  const registro={...resultado.registro,_baseExistente:!!baseConfirmada,_baseRevisao:baseConfirmada?._revisao||null,_baseAtualizadoEm:baseConfirmada?.atualizadoEm||null};
+  return salvarOrcamento(registro,{substitui:versoes.map(f=>f.op),baseRegistro:baseConfirmada});
+}
 
 /* Contagem de fotos ainda guardadas no aparelho, para a tela poder dizer. */
 async function fotosAindaNoAparelho() {
@@ -564,23 +742,34 @@ function historiar(registro, o_que) {
 let _subindo = false;
 async function subirFila() {
   if (_subindo || !S.senhaHash) return false;
-  atualizarFila();
-  if (!navigator.onLine && !S.fila.some(f=>f.confirmado)) return false;
   _subindo = true;
+  const dono=donoFila();
   try {
+    if(temDiarioOrc())await conferirDiarioParaEnvio(dono);
+    if(donoFila()!==dono)return false;
+    atualizarFila();
+    if (!navigator.onLine && !S.fila.some(f=>f.confirmado)) return false;
     // Web Locks serializa envios entre abas. O diário por operação garante
     // durabilidade mesmo nos navegadores sem essa API.
     if (navigator.locks) return await navigator.locks.request('domo-envio-' + donoFila(), enviarFilaDuravel);
     return await enviarFilaDuravel();
+  } catch(e) {if(donoFila()===dono)S.erroSync=e.message||'Não foi possível ler o diário local.';return false;
   } finally { _subindo = false; document.dispatchEvent(new CustomEvent('domo:status')); }
 }
 async function enviarFilaDuravel() {
+  const donoInicial=donoFila();
   try { migrarFilaAntiga(); } catch { S.erroFila = 'Migração de pendências incompleta: os dados originais foram preservados.'; }
+  let diarioDisponivel=!temDiarioOrc()||await conferirDiarioParaEnvio(donoInicial);
+  if(donoFila()!==donoInicial)return false;
+  if(diarioDisponivel&&temDiarioOrc()){
+    try{diarioDisponivel=await reconciliarEnviosOrc(donoInicial);}catch(e){if(donoFila()===donoInicial)S.erroSync='Confirmação do orçamento pendente: '+e.message;diarioDisponivel=false;}
+  }
+  if(donoFila()!==donoInicial)return false;
   atualizarFila();
-  if (S.erroFila) return false;
+  if (S.erroFila && S.erroFila!==ERRO_DIARIO_ORC) return false;
   // Um ACK já é definitivo. Depois de falha de cache, falta somente concluir
   // sua cópia local; reenviar a versão pré-carimbo pode violar o histórico.
-  const aguardandoCopia = S.fila.filter(f=>f.confirmado);
+  const aguardandoCopia = S.fila.filter(f=>f.confirmado&&(diarioDisponivel||f.colecao!=='orc'));
   if (aguardandoCopia.length) {
     const donoCopia=donoFila();
     for (const f of aguardandoCopia) {
@@ -598,17 +787,22 @@ async function enviarFilaDuravel() {
       S.erroSync='Envio confirmado; falta concluir a cópia offline. O registro canônico permanece neste aparelho.';
       restaurarPendencias();return false;
     }
-    for(const f of aguardandoCopia)localStorage.removeItem(chaveOperacao(f.op));
+    await removerOperacoes(aguardandoCopia);
     restaurarPendencias();S.erroSync='';
   }
   if (!navigator.onLine) return !S.fila.length;
   const contagem = new Map();
   for (const f of S.fila) { const k = f.colecao + '|' + f.registro.id; contagem.set(k, (contagem.get(k) || 0) + 1); }
-  const enviando = S.fila.filter(f => !f.recusado && contagem.get(f.colecao + '|' + f.registro.id) === 1).slice(0, 25);
-  if (!enviando.length) return !S.fila.length;
+  let enviando = S.fila.filter(f => !f.recusado && (diarioDisponivel||f.colecao!=='orc') && contagem.get(f.colecao + '|' + f.registro.id) === 1).slice(0, 25);
+  if (!enviando.length) return diarioDisponivel&&!S.fila.length;
   const dono = donoFila();
   try {
-    const r = await api('salvarLote', { protocoloEnvio: 2, itens: enviando.map(f => ({ colecao: f.colecao, registro: limparParaEnvio(f.registro) })) });
+    if(temDiarioOrc()){
+      try{await registrarEnviosOrc(enviando.filter(f=>f.colecao==='orc'),dono);}
+      catch(e){S.erroSync=e.message||'Não foi possível preservar a tentativa de envio do orçamento.';enviando=enviando.filter(f=>f.colecao!=='orc');if(!enviando.length)return false;}
+      if(donoFila()!==dono)return false;
+    }
+    const r = await api('salvarLote', { protocoloEnvio: 2, itens: enviando.map(f => ({ colecao: f.colecao, registro: {...limparParaEnvio(f.registro),...(f.colecao==='orc'&&temDiarioOrc()?{_operacaoEnvio:f.op}:{})} })) });
     const recusas = new Map((r.recusados || []).map(x => [x.colecao + '|' + x.id, x]));
     const salvos = new Map((r.salvos || []).map(x => [x._col + '|' + x.id, x]));
     const confirmados = new Map([...salvos].map(([k, x]) => [k, x]));
@@ -618,9 +812,13 @@ async function enviarFilaDuravel() {
     for (const f of enviando) {
       // Se foi substituída em outra aba durante o envio, seu sucessor permanece.
       const recusa = recusas.get(f.colecao + '|' + f.registro.id);
-      if (recusa) { if (localStorage.getItem(chaveOperacao(f.op))) { f.recusado = recusa.motivo || 'Recusado pelo servidor'; gravarOperacao(f); } }
+      if (recusa) { f.recusado = recusa.motivo || 'Recusado pelo servidor'; await persistirOperacao(f,true); }
       else if (confirmados.has(f.colecao + '|' + f.registro.id)) {
         const confirmado = confirmados.get(f.colecao + '|' + f.registro.id);
+        if(f.colecao==='orc'&&temDiarioOrc()){
+          await confirmarOperacaoOrc(f,confirmado,salvos.get(f.colecao+'|'+f.registro.id));
+          operacoesConfirmadas.add(f.op);continue;
+        }
         atualizarFila();
         for (const proxima of S.fila) {
           if (!(proxima.ancestrais || []).includes(f.op) || proxima.registro._baseRevisao !== f.registro._baseRevisao || proxima.registro._baseAtualizadoEm !== f.registro._baseAtualizadoEm) continue;
@@ -670,7 +868,7 @@ async function enviarFilaDuravel() {
     const envioIncompleto = incompleto;
     const copiaConfirmada = await gravarCache();
     if (copiaConfirmada) {
-      for (const op of operacoesConfirmadas) localStorage.removeItem(chaveOperacao(op));
+      await removerOperacoes(enviando.filter(f=>operacoesConfirmadas.has(f.op)));
     } else incompleto = true;
     if (donoFila() !== dono) return false;
     restaurarPendencias();
@@ -684,7 +882,7 @@ async function enviarFilaDuravel() {
     if (donoFila() === dono) S.erroSync = e.message || 'Falha ao enviar';
     if (e.semSenha && donoFila() === dono) document.dispatchEvent(new CustomEvent('domo:semsenha'));
     // A recusa do lote também permanece recuperável, nunca some da fila.
-    if (e.semPermissao) for (const f of enviando) { if (localStorage.getItem(chaveOperacao(f.op))) { f.recusado = e.message || 'Sem permissão'; gravarOperacao(f); } }
+    if (e.semPermissao) for (const f of enviando) { f.recusado = e.message || 'Sem permissão'; await persistirOperacao(f,true); }
     if (donoFila() === dono) restaurarPendencias();
     return false;
   }
@@ -976,7 +1174,7 @@ async function enviarAnexoDuravel(item, dono) {
   if (!reg || reg.apagadoEm) throw new Error('O orçamento não está disponível. O arquivo permanece guardado.');
   if (!(reg.anexos || []).some(a=>a.arquivoId===item.arquivoId)) {
     const copia = {...reg,anexos:[...(reg.anexos || []).filter(a=>a.arquivoId!==item.arquivoAnteriorId),item.meta]};
-    salvar(item.colecao,copia,{semSubir:true,baseRegistro:reg});
+    await salvarOrcamento(copia,{semSubir:true,baseRegistro:reg});
   }
   await subirFila(); atualizarFila();
   reg = achar(item.colecao,item.registroId);
@@ -1045,7 +1243,7 @@ async function enviarArquivosDaSessao(dono) {
           [item.campo]: [...new Set([...(x[item.campo] || []), item.arquivoId])],
           fotosPendentes: Math.max(0, (Number(x.fotosPendentes) || 0) - 1)
         })) });
-        salvar(item.colecao, copia, { semSubir: true });
+        await salvar(item.colecao, copia, { semSubir: true });
       }
       await subirFila();
       atualizarFila();
@@ -1063,6 +1261,12 @@ async function enviarArquivosDaSessao(dono) {
 }
 
 /* ── Rede ──────────────────────────────────────────────────────────────────── */
+const canalDiarioOrc=typeof BroadcastChannel!=='undefined'?new BroadcastChannel('domo-orcamento-diario'):null;
+function avisarDiarioOrc(){canalDiarioOrc?.postMessage({dono:donoFila()});}
+if(canalDiarioOrc)canalDiarioOrc.onmessage=async e=>{
+  const dono=donoFila();if(!dono||e.data?.dono!==dono)return;
+  try{await carregarDiarioOrcamento(dono);if(donoFila()!==dono)return;restaurarPendencias();document.dispatchEvent(new CustomEvent('domo:status'));document.dispatchEvent(new CustomEvent('domo:dados'));}catch{/* preserva as cópias e tenta na próxima sincronização */}
+};
 window.addEventListener('storage', (e) => {
   if (e.key && (e.key.startsWith(PREFIXO_FILA) || e.key === K.fila)) {
     try { migrarFilaAntiga(); restaurarPendencias(); } catch { /* mantém origem */ }
