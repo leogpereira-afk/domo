@@ -1654,9 +1654,11 @@ async function telaVerPublico(args) {
 }
 
 /* ── Partida ───────────────────────────────────────────────────────────────── */
-lerCache();
-render();
-if (S.senhaHash) puxar();
+(async () => {
+  await lerCache();
+  render();
+  if (S.senhaHash) puxar();
+})();
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 }

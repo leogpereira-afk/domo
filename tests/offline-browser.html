@@ -1,0 +1,53 @@
+<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Domo · conferência offline local</title>
+<style>body{font:16px system-ui;max-width:920px;margin:40px auto;padding:20px;background:#f0f4fa;color:#163952}button{background:#145ac4;color:white;border:0;border-radius:10px;padding:14px;margin:8px 0;cursor:pointer}li{padding:9px}pre{white-space:pre-wrap;background:white;padding:20px;border-radius:12px}</style>
+<h1>Domo · conferência offline</h1><p>Ambiente local com registros fictícios. Não altera o site oficial.</p><button id="run">Testar armazenamento e recarregar offline</button><button id="sync" hidden>Reconectar e conferir sincronização</button><ul id="results"></ul><pre id="status">Pronto para testar.</pre><a href="/#/painel">Abrir prévia do Domo</a>
+<script src="/config.js"></script><script src="/store.js"></script><script>
+const out=document.getElementById('status');
+const report=(msg)=>{const li=document.createElement('li');li.textContent='✓ '+msg;document.getElementById('results').append(li)};
+const check=(value,msg)=>{if(!value)throw Error(msg);report(msg)};
+window.toast=()=>{};
+const realApi=api;
+api=async()=>{throw Error('Rede indisponível no ensaio offline')};
+const marker='QA-OFFLINE-'+Date.now();
+const data={id:marker,nome:marker,nota:'Observação completa · acentos ç ã',categorias:'Teste local',ativo:true,extra:{valor:19.75,itens:['a','b']}};
+async function stage(){
+ if(location.search==='?novo=1'||sessionStorage.getItem('domo-test-stage')!=='reload')return;
+ document.getElementById('run').hidden=true;
+ await lerCache();
+ const id=sessionStorage.getItem('domo-test-id');
+ check(S.reg.forn.find(x=>x.id==='QA-LARGE').nota.length===6*1024*1024,'Cópia de 6 MiB restaurada após recarga sem consultar a rede');
+ check(S.fila.some(f=>f.registro.id===id),'Lançamento pendente preservado após recarga');
+ check(achar('forn',id).extra.valor===19.75 && achar('forn',id).nota==='Observação completa · acentos ç ã','Valores, campos adicionais e acentos preservados');
+ check(localStorage.getItem('qa-other-app')==='preservado','Dados de outro aplicativo preservados');
+ check(!S.erroCache,'Sem alerta de cópia offline incompleta');
+ out.textContent='Recarga offline conferida. O lançamento permanece pendente, pronto para reconectar.';
+ document.getElementById('sync').hidden=false;
+}
+document.getElementById('run').onclick=async()=>{try{
+ S.senhaHash=await sha256('demo-direcao');S.usuarioId='demo-direcao';S.quem='Direção de demonstração';S.perfil='direcao';
+ localStorage.setItem(K.senha,S.senhaHash);localStorage.setItem(K.usuario,S.usuarioId);localStorage.setItem(K.quem,S.quem);localStorage.setItem(K.perfil,S.perfil);
+ localStorage.setItem('qa-other-app','preservado');
+ const original=JSON.stringify({dono:donoFila(),em:1,reg:{forn:[{id:'LEGACY',nome:'Legado de teste'}]},cfg:null});localStorage.setItem(K.cache,original);
+ await lerCache();
+ check(await bancoCache('readonly',st=>st.get('legado:'+impressaoLocal(original)))===original,'Cópia antiga preservada byte a byte antes da migração');
+ S.reg.forn.push({id:'QA-LARGE',nome:'Registro fictício volumoso',nota:'x'.repeat(6*1024*1024)});
+ let quota=false;try{localStorage.setItem('qa-quota-probe',JSON.stringify(S.reg))}catch(e){quota=e.name==='QuotaExceededError'}
+ check(quota,'Limite real do localStorage reproduzido no navegador');
+ check(await gravarCache(),'Cópia completa confirmada no IndexedDB');
+ salvar('forn',data,{semSubir:true});await gravarCache();
+ sessionStorage.setItem('domo-test-id',marker);sessionStorage.setItem('domo-test-stage','reload');location.href=location.pathname;
+ }catch(e){out.textContent='FALHOU: '+e.stack}};
+document.getElementById('sync').onclick=async()=>{try{
+ api=realApi;
+ const cacheReal=bancoCache;bancoCache=async()=>{throw Error('Disco indisponível simulado')};
+ try{check(!await subirFila() && S.fila.length===1,'Falha na cópia após ACK mantém o lançamento recuperável')}finally{bancoCache=cacheReal}
+ check(await subirFila(),'Envio confirmado pelo servidor local de homologação');
+ const id=sessionStorage.getItem('domo-test-id');const rows=await (await fetch('/preview-state.json')).json();
+ const row=rows.find(x=>x.id===id);const text=JSON.stringify(row);
+ check(text.includes('Observação completa · acentos ç ã')&&text.includes('19.75'),'Campos completos conferidos na origem após sincronizar');
+ await lerCache();check(!S.fila.length && !S.erroCache,'Recuperação da cópia sem pendências e sem alerta');
+ out.textContent='PASSOU · quota real, migração, recarga offline, preservação e sincronização verificadas apenas com dados fictícios.';
+ document.getElementById('sync').hidden=true;
+ }catch(e){out.textContent='FALHOU: '+e.stack}};
+stage().catch(e=>out.textContent='FALHOU: '+e.stack);
+</script></html>

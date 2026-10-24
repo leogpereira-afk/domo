@@ -11,12 +11,21 @@ importers:
       '@electric-sql/pglite':
         specifier: 0.5.11
         version: 0.5.11
+      fake-indexeddb:
+        specifier: 6.2.4
+        version: 6.2.4
 
 packages:
 
   '@electric-sql/pglite@0.5.11':
     resolution: {integrity: sha512-SWuqsTjA4DDWqgZ05PC1RJaq8e00p5KACxbqaikDFQ8dIGA0SLRzuPniky7IW+q/c5RDNMdEXwv7mFBWIx9Hxw==}
 
+  fake-indexeddb@6.2.4:
+    resolution: {integrity: sha512-INKeIKEtSViN4yVtEWEUqbsqmaIy7Ls+MfU0yxQVXg67pOJ/sH1ZxcVrP8XrKULUFohcPD9gnmym+qBfEybACw==}
+    engines: {node: '>=18'}
+
 snapshots:
 
   '@electric-sql/pglite@0.5.11': {}
+
+  fake-indexeddb@6.2.4: {}

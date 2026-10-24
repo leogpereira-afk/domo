@@ -37,7 +37,7 @@ seed('proj',{id:'proj-demo',nome:'Projeto demonstrativo sem arquivo real',discip
 const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.png':'image/png','.webmanifest':'application/manifest+json','.svg':'image/svg+xml'};
 // Lista explícita: config.js nunca é lido do disco. Segredos, fontes de
 // servidor, diretório Git e arquivos fora do pacote público são inacessíveis.
-const publicFiles=new Set(['index.html','styles.css','store.js','ui.js','pdf.js','compras.js','acervo.js','cotacao.js','cronograma.js','qualificacao.js','compromissos.js','servicos.js','rh.js','permutas.js','drive.js','app.js','libs/jspdf.umd.min.js','manifest.webmanifest','logo-domo-branco.png','logo-domo.png','logo-domo-azul.png']);
+const publicFiles=new Set(['tests/offline-browser.html','index.html','styles.css','store.js','ui.js','pdf.js','compras.js','acervo.js','cotacao.js','cronograma.js','qualificacao.js','compromissos.js','servicos.js','rh.js','permutas.js','drive.js','app.js','libs/jspdf.umd.min.js','manifest.webmanifest','logo-domo-branco.png','logo-domo.png','logo-domo-azul.png']);
 const server=http.createServer(async(req,res)=>{
  try{
   const u=new URL(req.url,`http://127.0.0.1:${port}`);

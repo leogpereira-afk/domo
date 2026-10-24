@@ -1,10 +1,10 @@
 /* Service worker — deixa o app abrir sem internet (a obra costuma ter sinal ruim).
    Regra do kit: SUBIR o número do CACHE a cada publicação, senão o navegador
    continua servindo o arquivo velho. */
-const CACHE = 'domo-shell-v64';
+const CACHE = 'domo-shell-v65';
 const ARQUIVOS = [
   './', './index.html', './styles.css', './config.js', './store.js', './ui.js',
-  './pdf.js', './compras.js', './acervo.js', './cotacao.js', './cronograma.js', './qualificacao.js', './compromissos.js', './servicos.js', './rh.js', './permutas.js', './drive.js', './app.js?v=64',
+  './pdf.js', './compras.js', './acervo.js', './cotacao.js', './cronograma.js', './qualificacao.js', './compromissos.js', './servicos.js', './rh.js', './permutas.js', './drive.js', './app.js?v=65',
   './libs/jspdf.umd.min.js', './logo-diamond.png', './logo-domo.png', './logo-domo-branco.png',
   './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'
 ];
@@ -20,7 +20,7 @@ self.addEventListener('install', (e) => {
 
 self.addEventListener('activate', (e) => {
   e.waitUntil(caches.keys()
-    .then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+    .then((ks) => Promise.all(ks.filter((k) => k.startsWith('domo-shell-') && k !== CACHE).map((k) => caches.delete(k))))
     .then(() => self.clients.claim()));
 });
 

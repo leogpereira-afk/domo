@@ -146,15 +146,12 @@ function gravarOperacao(f) {
   const texto = JSON.stringify(f);
   try { localStorage.setItem(chave, texto); }
   catch {
-    // O cache pode ser baixado de novo; a fila nunca é descartável.
-    try { localStorage.removeItem(K.cache); localStorage.setItem(chave, texto); }
-    catch {
-      const msg = 'Memória do aparelho cheia: não foi possível guardar. Mantenha este formulário aberto e tente novamente.';
-      S.erroSync = msg;
-      document.dispatchEvent(new CustomEvent('domo:status'));
-      toast(msg, 'ruim');
-      const erro = new Error(msg); erro.code = 'DOMO_STORAGE_FULL'; throw erro;
-    }
+    // Não sacrifica uma cópia offline para abrir espaço para outro registro.
+    const msg = 'Memória do aparelho cheia: não foi possível guardar. Mantenha este formulário aberto e tente novamente.';
+    S.erroSync = msg;
+    document.dispatchEvent(new CustomEvent('domo:status'));
+    toast(msg, 'ruim');
+    const erro = new Error(msg); erro.code = 'DOMO_STORAGE_FULL'; throw erro;
   }
 }
 function atualizarFila() {
@@ -214,29 +211,93 @@ function migrarFilaAntiga() {
   }
   S.erroFila = '';
 }
+// Banco separado da fila de anexos: nenhuma atualização altera os Blobs pendentes.
+const DB_CACHE = 'domo_copia_offline';
+function bancoCache(modo, fn) {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_CACHE, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('copias');
+    req.onerror = () => reject(req.error);
+    req.onblocked = () => reject(new Error('Armazenamento ocupado por outra aba'));
+    req.onsuccess = () => {
+      const db = req.result;
+      const tx = db.transaction('copias', modo);
+      let result;
+      try { result = fn(tx.objectStore('copias')); }
+      catch (e) { db.close(); reject(e); return; }
+      tx.oncomplete = () => { db.close(); resolve(result.result); };
+      tx.onerror = tx.onabort = () => { db.close(); reject(tx.error || new Error('Cópia offline não confirmada')); };
+    };
+  });
+}
+// Libera apenas a representação antiga depois de preservar e reler seus bytes.
+// O conteúdo original permanece no banco, inclusive dados ainda não migráveis.
+async function preservarCacheLegado(texto) {
+  if (!texto) return;
+  const chave = 'legado:' + impressaoLocal(texto);
+  await bancoCache('readwrite', st => st.put(texto, chave));
+  if (await bancoCache('readonly', st => st.get(chave)) !== texto) throw new Error('Cópia divergente');
+  if (localStorage.getItem(K.cache) === texto) localStorage.removeItem(K.cache);
+}
+function aplicarCache(c) {
+  S.reg = Object.assign(regVazio(), c.reg); S.cfg = c.cfg || null; S.ultimoPull = c.em || 0;
+}
 function lerCache() {
   S.quem = localStorage.getItem(K.quem) || '';
   S.senhaHash = localStorage.getItem(K.senha) || '';
   S.perfil = localStorage.getItem(K.perfil) || 'obra';
   S.usuarioId = localStorage.getItem(K.usuario) || '';
   S.acessoProprio = !!S.usuarioId;
+  const dono = donoFila(), senha = S.senhaHash;
+  const texto = localStorage.getItem(K.cache);
+  let legado;
   try {
-    const c = JSON.parse(localStorage.getItem(K.cache) || 'null');
-    if (c && c.reg && (!c.dono || c.dono === donoFila()) && S.senhaHash) { S.reg = Object.assign(S.reg, c.reg); S.cfg = c.cfg || null; S.ultimoPull = c.em || 0; }
+    const c = JSON.parse(texto || 'null');
+    if (c && c.reg && (!c.dono || c.dono === dono) && senha) { legado = c; aplicarCache(c); }
   } catch { S.erroCache = 'Cópia offline indisponível neste aparelho. Conecte para atualizar.'; }
-  try { migrarFilaAntiga(); } catch { S.erroFila = 'Não foi possível concluir a migração das pendências. A origem foi preservada; libere espaço neste aparelho.'; }
-  restaurarPendencias();
+  const pendencias = () => {
+    try { migrarFilaAntiga(); } catch { S.erroFila = 'Não foi possível concluir a migração das pendências. A origem foi preservada; libere espaço neste aparelho.'; }
+    restaurarPendencias();
+  };
+  pendencias();
+  if (typeof indexedDB === 'undefined' || !indexedDB || !dono || !senha) return Promise.resolve();
+  return (async () => {
+    try {
+      const c = await bancoCache('readonly', st => st.get(dono));
+      if (donoFila() !== dono || S.senhaHash !== senha) return;
+      if (c && c.reg && c.dono === dono && (!legado || c.em >= legado.em)) aplicarCache(c);
+      else if (legado) await bancoCache('readwrite', st => st.put({...legado, dono}, dono));
+      await preservarCacheLegado(texto);
+      if (donoFila() !== dono || S.senhaHash !== senha) return;
+      S.erroCache = '';
+    } catch { if (donoFila() === dono) S.erroCache = 'Cópia offline não atualizada. Os dados anteriores foram preservados; conecte para conferir.'; }
+    if (donoFila() === dono && S.senhaHash === senha) pendencias();
+  })();
 }
+let cacheEmGravacao = Promise.resolve();
 function gravarCache() {
-  try {
-    localStorage.setItem(K.cache, JSON.stringify({ reg: S.reg, cfg: S.cfg, dono: donoFila(), em: Date.now() }));
-    S.erroCache = '';
-    return true;
-  } catch {
-    S.erroCache = 'Cópia offline incompleta neste aparelho. Os envios confirmados continuam no servidor.';
-    document.dispatchEvent(new CustomEvent('domo:status'));
-    return false;
+  const dono = donoFila(), senha = S.senhaHash;
+  const texto = JSON.stringify({ reg: S.reg, cfg: S.cfg, dono, em: Date.now() });
+  const resultado = ok => {
+    if (donoFila() === dono && S.senhaHash === senha) {
+      S.erroCache = ok ? '' : 'Cópia offline incompleta neste aparelho. As pendências foram preservadas; mantenha o formulário aberto se não conseguir salvar.';
+      document.dispatchEvent(new CustomEvent('domo:status'));
+    }
+    return ok;
+  };
+  if (!dono || !senha) return false;
+  // Compatibilidade com navegadores que não oferecem IndexedDB.
+  if (typeof indexedDB === 'undefined' || !indexedDB) {
+    try { localStorage.setItem(K.cache, texto); return resultado(true); } catch { return resultado(false); }
   }
+  cacheEmGravacao = cacheEmGravacao.then(async () => {
+    try {
+      await bancoCache('readwrite', st => st.put(JSON.parse(texto), dono));
+      await preservarCacheLegado(localStorage.getItem(K.cache));
+      return resultado(true);
+    } catch { return resultado(false); }
+  });
+  return cacheEmGravacao;
 }
 // Compatibilidade com a inicialização/testes antigos: nunca substitui a fila.
 function gravarFila() { for (const f of S.fila) gravarOperacao(f); return true; }
@@ -381,6 +442,7 @@ async function enviarFilaDuravel() {
     const confirmados = new Map([...salvos].map(([k, x]) => [k, x]));
     for (const x of (r.confirmados || [])) confirmados.set(x.colecao + '|' + x.id, x);
     let incompleto = false;
+    const operacoesConfirmadas = new Set();
     for (const f of enviando) {
       // Se foi substituída em outra aba durante o envio, seu sucessor permanece.
       const recusa = recusas.get(f.colecao + '|' + f.registro.id);
@@ -393,12 +455,13 @@ async function enviarFilaDuravel() {
           proxima.registro._baseExistente = true; proxima.registro._baseRevisao = confirmado._revisao || null; proxima.registro._baseAtualizadoEm = confirmado.atualizadoEm || null;
           gravarOperacao(proxima);
         }
-        localStorage.removeItem(chaveOperacao(f.op));
+        operacoesConfirmadas.add(f.op);
       }
       else incompleto = true; // HTTP 200 sozinho não confirma cada registro.
     }
     if (donoFila() !== dono) return false; // logout/troca de sessão durante o request
     atualizarFila();
+    S.fila = S.fila.filter(f => !operacoesConfirmadas.has(f.op));
     for (const [chave, confirmado] of confirmados) {
       if (salvos.has(chave)) continue;
       const col = confirmado.colecao || confirmado._col;
@@ -410,9 +473,17 @@ async function enviarFilaDuravel() {
       const i = arr.findIndex(x => x.id === salvo.id);
       if (i >= 0) arr[i] = salvo; else arr.unshift(salvo);
     }
+    // O ACK remoto não substitui a cópia offline: só retira o diário depois
+    // que o snapshot completo foi confirmado pela transação do IndexedDB.
+    const envioIncompleto = incompleto;
+    const copiaConfirmada = await gravarCache();
+    if (copiaConfirmada || typeof indexedDB === 'undefined' || !indexedDB) {
+      for (const op of operacoesConfirmadas) localStorage.removeItem(chaveOperacao(op));
+    } else incompleto = true;
+    if (donoFila() !== dono) return false;
     restaurarPendencias();
-    gravarCache();
-    S.erroSync = incompleto ? 'O servidor não confirmou todos os itens. As pendências continuam neste aparelho.' : '';
+    S.erroSync = envioIncompleto ? 'O servidor não confirmou todos os itens. As pendências continuam neste aparelho.'
+      : incompleto ? 'Envio confirmado; falta concluir a cópia offline. O lançamento continua preservado neste aparelho.' : '';
     if (recusas.size) document.dispatchEvent(new CustomEvent('domo:sempermissao', { detail: { qtd: recusas.size, msg: [...recusas.values()][0].motivo, itens: [...recusas.values()] } }));
     document.dispatchEvent(new CustomEvent('domo:dados'));
     if (!incompleto && S.fila.some(f => !f.recusado && contagem.get(f.colecao + '|' + f.registro.id) === 1)) setTimeout(subirFila, 300);
@@ -504,7 +575,7 @@ async function puxar() {
     }
     S.ultimoPull = Date.now();
     S.erroSync = erroEnvio;
-    gravarCache();
+    await gravarCache();
     // Só agora os pais e subitens estão disponíveis para costurar as fotos.
     await subirArquivosPendentes();
     // Só avisa a tela quando algo REALMENTE mudou. Antes, o sync de 90s

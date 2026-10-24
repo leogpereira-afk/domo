@@ -2,15 +2,16 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { IDBFactory } from 'fake-indexeddb';
 const root = new URL('../', import.meta.url);
 const source=fs.readFileSync(new URL('store.js',root),'utf8');
 const app=fs.readFileSync(new URL('app.js',root),'utf8');
 function storage({data=new Map(), fail=()=>false}={}) {
  return {data,get length(){return data.size},key(i){return [...data.keys()][i]??null},getItem(k){return data.get(k)??null},setItem(k,v){if(fail(k,String(v),data))throw new DOMException('Quota exceeded','QuotaExceededError');data.set(k,String(v))},removeItem(k){data.delete(k)}};
 }
-function make({ls=storage(),online=false,api=async()=>{throw new Error('NETWORK_UNAVAILABLE')},files=[]}={}) {
+function make({ls=storage(),online=false,api=async()=>{throw new Error('NETWORK_UNAVAILABLE')},files=[],indexedDB}={}) {
  const warnings=[],events=[],toasts=[],timers=[],uploads=[],listeners={};
- const c={console:{warn:(...x)=>warnings.push(x.join(' '))}, navigator:{onLine:online},localStorage:ls,
+ const c={console:{warn:(...x)=>warnings.push(x.join(' '))}, navigator:{onLine:online},localStorage:ls,indexedDB,structuredClone,
   document:{hidden:false,addEventListener(){},dispatchEvent:e=>events.push({type:e.type,detail:e.detail})},
   window:{addEventListener:(name,cb)=>listeners[name]=cb}, CustomEvent:class{constructor(type,opts={}){this.type=type;this.detail=opts.detail}},
   setInterval(){},setTimeout(fn,ms){timers.push({fn,ms});return 1},clearTimeout(){},
@@ -69,3 +70,54 @@ test('real multipart uploader captures the identity and stops before sending chu
 test('reviewed resolution preserves the exact server snapshot as well as every local version',()=>{const a=make();a.S.reg.forn=[record('EDIT',{atualizadoEm:'old-time',_revisao:'old-rev'})];a.salvar('forn',{...a.S.reg.forn[0],nota:'local choice'},{semSubir:true});a.c.__op=a.S.fila[0].op;a.c.__server={...record('EDIT'),nota:'server version to retain',atualizadoEm:'current-time',_revisao:'current-rev'};vm.runInContext('resolverPendenciaLocal(__op,__server)',a.c);const copies=vm.runInContext('versoesLocaisPreservadas()',a.c);assert.equal(copies.length,2);assert.equal(copies.find(x=>x.origem==='servidor').registro.nota,'server version to retain');assert.equal(copies.find(x=>x.origem==='servidor').registro._revisao,'current-rev');});
 test('new client declares durable-refusal protocol on each batch request',async()=>{let body;const a=make({online:true,api:async(action,b)=>{body=b;return remoteApi()(action,b)}});a.salvar('forn',record('PROTOCOL'),{semSubir:true});await a.subirFila();assert.equal(body.protocoloEnvio,2);});
 test('a storage event behind an old editor cannot cause it to delete the other tab pending version',()=>{const ls=storage(),a=make({ls}),b=make({ls});const original=record('EDIT',{atualizadoEm:'server-time',_revisao:'server-rev'});a.S.reg.forn=[{...original}];b.S.reg.forn=[{...original}];b.salvar('forn',{...original,nota:'other tab'},{semSubir:true});a.listeners.storage({key:'domo_fila_v2:'+b.S.fila[0].op});a.salvar('forn',{...original,nota:'stale editor'},{semSubir:true});assert.equal(loginReload(a).S.fila.length,2);});
+
+function remembered(ls){ls.setItem('domo_senha','synthetic');ls.setItem('domo_usuario','qa-user');return ls;}
+test('full offline snapshot survives localStorage quota and a cold offline reload',async()=>{
+ const db=new IDBFactory(),ls=remembered(storage({fail:k=>k==='domo_cache_v1'})),a=make({ls,indexedDB:db});
+ a.S.reg.forn=[record('LARGE',{nota:'á'.repeat(6*1024*1024),campos:{valor:12.34,lista:[1,2,3]}})];
+ assert.equal(await a.gravarCache(),true);
+ const b=make({ls,indexedDB:db});await b.lerCache();
+ assert.equal(b.S.reg.forn[0].nota,a.S.reg.forn[0].nota);assert.deepEqual(JSON.parse(JSON.stringify(b.S.reg.forn[0].campos)),{valor:12.34,lista:[1,2,3]});assert.equal(b.S.erroCache,'');
+});
+test('legacy snapshot migrates intact before freeing its localStorage space',async()=>{
+ const db=new IDBFactory(),ls=remembered(storage()),a=make({ls,indexedDB:db});
+ const old=JSON.stringify({dono:'usuario:qa-user',reg:{forn:[record('LEGACY')]},cfg:{obras:[]},em:123});ls.setItem(a.K.cache,old);ls.setItem('other-app','preserve');
+ await a.lerCache();assert.equal(ls.getItem(a.K.cache),null);assert.equal(ls.getItem('other-app'),'preserve');
+ const b=make({ls,indexedDB:db});await b.lerCache();assert.equal(b.S.reg.forn[0].id,'LEGACY');
+});
+test('unavailable storage never deletes the legacy copy when a new operation fails',async()=>{
+ const ls=remembered(storage({fail:k=>k.startsWith('domo_fila')})),a=make({ls});ls.setItem(a.K.cache,'original preserved');
+ assert.throws(()=>a.salvar('forn',record('FAIL'),{semSubir:true}));assert.equal(ls.getItem(a.K.cache),'original preserved');
+});
+test('offline cache plus pending journal reload and synchronize complete records',async()=>{
+ const db=new IDBFactory(),ls=remembered(storage({fail:k=>k==='domo_cache_v1'})),a=make({ls,indexedDB:db});
+ a.S.reg.forn=[record('EXISTING')];await a.gravarCache();a.salvar('forn',record('PENDING',{valor:19.75,anexos:['synthetic-file']}),{semSubir:true});await a.gravarCache();
+ const server=new Map(),b=make({ls,indexedDB:db,online:true,api:remoteApi(server)});await b.lerCache();assert.equal(b.S.reg.forn.length,2);assert.equal(b.S.fila.length,1);await b.subirFila();await b.gravarCache();
+ const c=make({ls,indexedDB:db});await c.lerCache();assert.equal(c.S.fila.length,0);assert.equal(c.S.reg.forn.length,2);assert.equal(server.get('PENDING').valor,19.75);assert.equal(c.S.reg.forn.find(x=>x.id==='PENDING').anexos[0],'synthetic-file');assert.equal(c.S.erroCache,'');
+});
+test('offline snapshots are isolated by account',async()=>{
+ const db=new IDBFactory(),ls=remembered(storage()),a=make({ls,indexedDB:db});a.S.reg.forn=[record('PRIVATE')];await a.gravarCache();ls.setItem('domo_usuario','other');
+ const b=make({ls,indexedDB:db});await b.lerCache();assert.equal(b.S.reg.forn.length,0);
+});
+test('failed IndexedDB transaction preserves previous copy and reports incomplete cache',async()=>{
+ const db=new IDBFactory(),ls=remembered(storage()),a=make({ls,indexedDB:db});a.S.reg.forn=[record('BEFORE')];await a.gravarCache();
+ a.c.bancoCache=async()=>{throw new Error('disk full')};a.S.reg.forn.push(record('AFTER'));assert.equal(await a.gravarCache(),false);assert.match(a.S.erroCache,/offline/);
+ const b=make({ls,indexedDB:db});await b.lerCache();assert.equal(b.S.reg.forn[0].id,'BEFORE');
+});
+test('delayed cache read cannot reveal previous account after session switch',async()=>{
+ const db=new IDBFactory(),ls=remembered(storage()),a=make({ls,indexedDB:db});a.S.reg.forn=[record('PRIVATE')];await a.gravarCache();
+ const b=make({ls,indexedDB:db});const read=b.lerCache();b.S.usuarioId='other';b.S.reg.forn=[];await read;assert.equal(b.S.reg.forn.length,0);
+});
+test('migration failure keeps original bytes and other applications untouched',async()=>{
+ const ls=remembered(storage()),a=make({ls,indexedDB:new IDBFactory()});const original=JSON.stringify({dono:'usuario:qa-user',reg:{forn:[record('OLD')]},em:1});ls.setItem(a.K.cache,original);ls.setItem('foreign','untouched');a.c.bancoCache=async()=>{throw Error('blocked')};await a.lerCache();assert.equal(ls.getItem(a.K.cache),original);assert.equal(ls.getItem('foreign'),'untouched');assert.equal(a.S.reg.forn[0].id,'OLD');
+});
+test('ACK never removes the last local journal before IndexedDB commits its replacement',async()=>{
+ const db=new IDBFactory(),ls=remembered(storage()),server=new Map(),a=make({ls,indexedDB:db,online:true,api:remoteApi(server)});
+ a.salvar('forn',record('ACK-SAFE'),{semSubir:true});await a.gravarCache();a.c.bancoCache=async()=>{throw Error('disk full')};
+ assert.equal(await a.subirFila(),false);assert.equal(server.has('ACK-SAFE'),true);assert.equal(a.S.fila.length,1);assert(ls.getItem('domo_fila_v2:'+a.S.fila[0].op));
+});
+test('activating Domo preserves cached copies belonging to other applications',async()=>{
+ const events={},removed=[];let done;const sw=fs.readFileSync(new URL('sw.js',root),'utf8');
+ vm.runInNewContext(sw,{self:{addEventListener:(name,fn)=>events[name]=fn,clients:{claim:async()=>{}}},caches:{keys:async()=>['domo-shell-v64','domo-shell-v65','central-offline-v1'],delete:async k=>removed.push(k)}});
+ events.activate({waitUntil:p=>done=p});await done;assert.deepEqual(removed,['domo-shell-v64']);
+});
