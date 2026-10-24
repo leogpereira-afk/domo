@@ -21,6 +21,7 @@ export const COLECOES: Record<string, { pre: string; nome: string }> = {
   comp:  { pre: "",   nome: "Compromisso" },
   pessoa: { pre: "",  nome: "Colaborador" },
   permuta: { pre: "", nome: "Permuta" },
+  orc: { pre: "", nome: "Orçamento Executivo" },
 };
 
 export const NOMES_COLECOES = Object.keys(COLECOES);

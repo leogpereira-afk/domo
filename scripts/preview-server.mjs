@@ -12,6 +12,13 @@ const nuc=await env('domo-nucleo');
 const acervo=await env('domo-acervo',{state:nuc.state});
 const hash=s=>createHash('sha256').update(s).digest('hex');
 const now=new Date().toISOString(), day=now.slice(0,10);
+const budgetPath=process.env.DOMO_BUDGET_SEED;
+const budgetPdf=process.env.DOMO_BUDGET_PDF;
+const statePath=process.env.DOMO_PREVIEW_STATE;
+for(const privatePath of [budgetPath,budgetPdf,statePath].filter(Boolean)){
+ if(path.resolve(privatePath).startsWith(path.resolve(root)+path.sep))throw new Error('Dados privados da prévia devem ficar fora do repositório.');
+}
+const budget=budgetPath?JSON.parse(await fs.readFile(budgetPath,'utf8')):null;
 Object.assign(nuc.cfg,{
   senhaHash:hash(hash('demo-direcao')),
   empresa:{nome:'Construtora de Demonstração',nomeCurto:'Domo · prévia local',endereco:'Endereço fictício para demonstração',cnpj:'',email:''},
@@ -34,10 +41,30 @@ seed('pessoa',{id:'pessoa-demo',nome:'Colaborador de demonstração',cargo:'Fun�
 seed('doc',{id:'doc-demo',nome:'Documento demonstrativo',tipo:'Outros',validadeEm:day,numero:'DEMO',obraId:'obra-demo'});
 seed('doc',{id:'lixeira-demo',nome:'Documento fictício com nome extenso para verificar a tabela da lixeira no celular',tipo:'Outros',apagadoEm:now,apagadoPor:'Usuário de demonstração'});
 seed('proj',{id:'proj-demo',nome:'Projeto demonstrativo sem arquivo real',disciplina:'Arquitetônico',obraId:'obra-demo',revisao:'R00',versoes:[]});
+if(budget){
+ nuc.cfg.obras.push({id:budget.obraId,nome:budget.nome,endereco:budget.origem.endereco||'',ativa:true});
+ seed('orc',budget);
+ if(statePath){
+  try{
+   const saved=JSON.parse(await fs.readFile(statePath,'utf8'));
+   if(saved.hash!==budget.origem.hash)throw new Error('A cópia da prévia pertence a outro orçamento.');
+   for(const row of saved.rows||[])seed(row.colecao,row.registro);
+   for(const [key,bytes] of saved.parts||[])nuc.parts.set(key,Uint8Array.from(bytes));
+  }catch(e){if(e.code!=='ENOENT')throw e;}
+ }
+}
+let stateWrite=Promise.resolve();
+async function preservePreview(){
+ if(!statePath||!budget)return;
+ const payload=JSON.stringify({hash:budget.origem.hash,rows:[...nuc.rows.values()],parts:[...nuc.parts].map(([k,v])=>[k,[...v]])});
+ stateWrite=stateWrite.then(async()=>{await fs.writeFile(statePath+'.tmp',payload,{mode:0o600});await fs.rename(statePath+'.tmp',statePath);});
+ await stateWrite;
+}
+function budgetAccess(req){return ['demo-direcao','demo-escritorio'].some(password=>req.headers['x-senha']===hash(password));}
 const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.png':'image/png','.webmanifest':'application/manifest+json','.svg':'image/svg+xml'};
 // Lista explícita: config.js nunca é lido do disco. Segredos, fontes de
 // servidor, diretório Git e arquivos fora do pacote público são inacessíveis.
-const publicFiles=new Set(['tests/offline-browser.html','index.html','styles.css','store.js','ui.js','pdf.js','compras.js','acervo.js','cotacao.js','cronograma.js','qualificacao.js','compromissos.js','servicos.js','rh.js','permutas.js','drive.js','app.js','libs/jspdf.umd.min.js','manifest.webmanifest','logo-domo-branco.png','logo-domo.png','logo-domo-azul.png']);
+const publicFiles=new Set(['tests/offline-browser.html','index.html','styles.css','store.js','ui.js','pdf.js','compras.js','acervo.js','cotacao.js','cronograma.js','qualificacao.js','compromissos.js','servicos.js','rh.js','permutas.js','drive.js','app.js','orcamento.js','orcamento-model.js','orcamento.css','libs/jspdf.umd.min.js','manifest.webmanifest','logo-domo-branco.png','logo-domo.png','logo-domo-azul.png']);
 const server=http.createServer(async(req,res)=>{
  try{
   const u=new URL(req.url,`http://127.0.0.1:${port}`);
@@ -47,6 +74,11 @@ const server=http.createServer(async(req,res)=>{
    res.setHeader('Content-Type',mime['.js']);
    res.end("const TOKEN='synthetic-token';const SUPABASE_URL=location.origin;const API=SUPABASE_URL+'/functions/v1/domo-nucleo';const API_ARQ=SUPABASE_URL+'/functions/v1/domo-acervo';const VERSAO='prévia local';");return;
   }
+  if(u.pathname==='/preview-budget-source'){
+   if(req.method!=='POST'||!budget||!budgetPdf){res.writeHead(404).end();return;}
+   if(!budgetAccess(req)){res.writeHead(403).end('Sem acesso');return;}
+   res.setHeader('Content-Type','application/pdf');res.end(await fs.readFile(budgetPdf));return;
+  }
   if(u.pathname.startsWith('/functions/v1/')){
    if(req.method!=='POST'){res.writeHead(405).end();return;}
    const body=[];for await(const c of req)body.push(c);
@@ -54,14 +86,15 @@ const server=http.createServer(async(req,res)=>{
    const handler=u.pathname.endsWith('domo-acervo')?acervo.handler:u.pathname.endsWith('domo-nucleo')?nuc.handler:null;
    if(!handler){res.writeHead(404).end();return;}
    const response=await handler(new Request(u,{method:'POST',headers:req.headers,body:Buffer.concat(body)}));
+   await preservePreview();
    res.statusCode=response.status;res.setHeader('Content-Type','application/json');res.end(Buffer.from(await response.arrayBuffer()));return;
   }
-  if(u.pathname==='/preview-state.json'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify([...nuc.rows.values()]));return;}
+  if(u.pathname==='/preview-state.json'){if(budget&&!budgetAccess(req)){res.writeHead(403).end();return;}res.setHeader('Content-Type','application/json');res.end(JSON.stringify([...nuc.rows.values()]));return;}
   let pathname=decodeURIComponent(u.pathname==='/'?'/index.html':u.pathname);
   if(pathname.includes('..')||(!publicFiles.has(pathname.slice(1))&&!/^\/icons\/[a-zA-Z0-9_-]+\.png$/.test(pathname))){res.writeHead(404).end();return;}
   let data=await fs.readFile(path.join(root,pathname));
   if(pathname==='/app.js') data=Buffer.from(data.toString().replace("if ('serviceWorker' in navigator)", 'if (false)'));
-  if(pathname==='/index.html') data=Buffer.from(data.toString().replace('<body>',`<body><aside style="position:fixed;z-index:150;bottom:0;left:0;right:0;padding:6px 12px;background:#12395f;color:white;font:12px system-ui;text-align:center">PRÉVIA LOCAL · Dados fictícios · Não publicada · Senha: demo-direcao</aside>`));
+  if(pathname==='/index.html') data=Buffer.from(data.toString().replace('<body>',`<body style="padding-bottom:42px"><aside style="position:fixed;z-index:150;bottom:0;left:0;right:0;padding:6px 12px;background:#12395f;color:white;font:12px system-ui;text-align:center">PRÉVIA LOCAL · ${budget?'Orçamento do PDF · Demais cadastros fictícios':'Dados fictícios'} · Não publicada · Senha: demo-direcao</aside>`));
   res.setHeader('Content-Type',mime[path.extname(pathname)]||'application/octet-stream');res.end(data);
  }catch(e){res.writeHead(e.code==='ENOENT'?404:500,{'Content-Type':'text/plain'}).end(e.code==='ENOENT'?'Não encontrado':'Erro na prévia local');console.error(e.message);}
 });

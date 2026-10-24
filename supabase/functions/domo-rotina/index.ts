@@ -15,6 +15,7 @@ import { json } from "../_shared/cors.ts";
 import { NOMES_COLECOES } from "../_shared/colecoes.ts";
 import { cfgSemSegredo } from "../_shared/acesso.ts";
 import { arquivosDoRegistro } from "../_shared/arquivos.ts";
+import { reservarExclusaoOrcamento, removerOrcamentoSeInalterado } from "../_shared/orcamento.ts";
 import {
   db,
   agora,
@@ -28,6 +29,7 @@ import {
   registrarLog,
   lerColecaoBruta,
   lerApagados,
+  atualizarRegistro,
 } from "../_shared/dados.ts";
 
 const DIAS_BACKUP = 60;
@@ -36,6 +38,24 @@ const DIAS_LIXEIRA = 90;
 const META = "_arqmeta";
 
 const diasAtras = (n: number) => new Date(Date.now() - n * 86400000).toISOString();
+
+// A reserva e a marca de exclusão disputam o mesmo CAS de metadados.
+// O orçamento não pode confirmar um vínculo enquanto o arquivo é removido.
+async function reservarExclusaoArquivo(id: string, ignorarRegistro?: {colecao:string,id:string}): Promise<any> {
+  return atualizarRegistro(META,id,async (meta: any) => {
+    if (!meta) return null;
+    const reserva=meta.vinculoPendente;
+    if (reserva?.colecao === 'orc') {
+      const alvo=await lerUm('orc',reserva.registroId);
+      if (alvo && !alvo.apagadoEm) return null;
+    }
+    const registros=await lerTudo(null,NOMES_COLECOES);
+    const limite=diasAtras(DIAS_LIXEIRA);
+    if (registros.some((r:any)=>(!ignorarRegistro || r._col!==ignorarRegistro.colecao || r.id!==ignorarRegistro.id) &&
+      (!r.apagadoEm || r.apagadoEm>=limite) && arquivosDoRegistro(r).includes(id))) return null;
+    return {...meta,excluindoEm:meta.excluindoEm || agora()};
+  });
+}
 
 // arquivosDoRegistro vem de _shared/arquivos.ts (cópia única). Antes esta cópia
 // não conhecia anexos/asos, então o passo 5 (varredor de órfãos) apagava o PDF
@@ -102,15 +122,20 @@ Deno.serve(async (req) => {
     for (const linha of data) {
       const o = linha.registro as any;
       if (!o.apagadoEm || o.apagadoEm >= limite) continue;
+      const reservado = linha.colecao === 'orc' ? await reservarExclusaoOrcamento(linha.id, o) : null;
+      if (linha.colecao === 'orc' && !reservado) continue;
       for (const idArq of arquivosDoRegistro(o)) {
         if (usados.has(idArq)) continue;
-        const meta = await lerUm(META, idArq);
+        const meta = await reservarExclusaoArquivo(idArq,{colecao:linha.colecao,id:linha.id});
+        if (!meta) continue;
         const chaves: string[] = [];
         for (let i = 0; i < ((meta && meta.partes) || 1); i++) chaves.push(idArq + "/p" + i);
         await apagarArquivo(chaves);
         await apagarDeVez(META, idArq);
       }
-      await apagarDeVez(linha.colecao, linha.id);
+      if (linha.colecao === 'orc') {
+        if (!await removerOrcamentoSeInalterado(linha.id, reservado)) continue;
+      } else await apagarDeVez(linha.colecao, linha.id);
       apagados++;
     }
     resultado.lixeiraApagada = apagados;
@@ -132,9 +157,15 @@ Deno.serve(async (req) => {
     for (const l of metas) {
       const m = l.registro as any;
       if (usados.has(l.id)) continue;
+      // Upload durável do orçamento já reservou seu destino autenticado.
+      // O vínculo pode esperar dias no aparelho; idade não confirma abandono.
+      const reserva = m && m.vinculoPendente;
+      if (reserva?.colecao === 'orc' && registros.some((r: any) => r._col === 'orc' && r.id === reserva.registroId && !r.apagadoEm)) continue;
       if (m && m.criadoEm && m.criadoEm > ontem) continue;
+      const reservado=await reservarExclusaoArquivo(l.id);
+      if (!reservado) continue;
       const chaves: string[] = [];
-      for (let i = 0; i < ((m && m.partes) || 1); i++) chaves.push(l.id + "/p" + i);
+      for (let i = 0; i < (reservado.partes || 1); i++) chaves.push(l.id + "/p" + i);
       await apagarArquivo(chaves);
       await apagarDeVez(META, l.id);
       orfaos++;

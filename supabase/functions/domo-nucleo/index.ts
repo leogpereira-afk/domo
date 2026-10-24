@@ -22,6 +22,7 @@ import {
   filtrarLeitura, podeLerRegistro, hashGuardado, perfilDe, sha256, COLECOES_SO_DIRECAO, type Quem,
 } from "../_shared/acesso.ts";
 import { validarRegistro, moedaServidor } from "../_shared/validacao.ts";
+import { validarOrcamentoServidor, gravarOrcamentoSeInalterado, conferirRestauracaoOrcamentos, reservarExclusaoOrcamento, removerOrcamentoSeInalterado } from "../_shared/orcamento.ts";
 import { arquivosDoRegistro } from "../_shared/arquivos.ts";
 import {
   db, agora, idNovo, tokenCurto, lerUm, gravarUm, lerTudo, apagarDeVez,
@@ -246,7 +247,9 @@ async function gravar(col: string, enviado: any, por: string, autorizar?: (atual
   }
 
   validarRegistro(col, novo, antigo);
-  if (!await gravarSeInalterado(col, id, antigo, novo)) continue;
+  if (!await (col === 'orc'
+    ? gravarOrcamentoSeInalterado(id, antigo, novo, lerUm)
+    : gravarSeInalterado(col, id, antigo, novo))) continue;
   if (pre && novo.numero) {
     try { await guardarIndiceNumero(col, novo.numero, id); } catch { /* índice é atalho */ }
   }
@@ -638,10 +641,11 @@ Deno.serve(async (req) => {
           const reg = reporProtegidos(quem, it.colecao, it.registro, atual);
           const motivo = motivoRecusa(quem, it.colecao, reg, atual);
           if (motivo) { recusados.push({ colecao: it.colecao, id: it.registro.id, motivo }); continue; }
-          salvos.push(await gravar(it.colecao, it.registro, por, (maisAtual: any) => {
+          salvos.push(await gravar(it.colecao, it.registro, por, async (maisAtual: any) => {
             const limpo = reporProtegidos(quem, it.colecao, it.registro, maisAtual);
             const erro = motivoRecusa(quem, it.colecao, limpo, maisAtual);
             if (erro) throw new Error(erro);
+            if (it.colecao === "orc") return await validarOrcamentoServidor({ ...(maisAtual || {}), ...limpo }, maisAtual, perfilDe(quem), lerUm, lerTudo, quem);
             return limpo;
           }));
           } catch (e) {
@@ -698,9 +702,23 @@ Deno.serve(async (req) => {
         let apagados = 0, arquivos = 0;
         for (const linha of (data || [])) {
           const o = linha.registro as any;
+          const reservado = linha.colecao === 'orc' ? await reservarExclusaoOrcamento(linha.id, o) : null;
+          // Uma restauração que venceu a corrida conserva registro e arquivos.
+          if (linha.colecao === 'orc' && !reservado) continue;
           for (const idArq of arquivosDoRegistro(o)) {
             if (usados.has(idArq)) continue;
-            const meta = await lerUm("_arqmeta", idArq);
+            const meta = linha.colecao === 'orc' ? await atualizarRegistro('_arqmeta', idArq, async (atual: any) => {
+              if (!atual) return null;
+              const destino = atual.vinculoPendente;
+              if (destino?.colecao === 'orc') {
+                const dono = await lerUm('orc', destino.registroId);
+                if (dono && !dono.apagadoEm) return null;
+              }
+              const registros = await lerTudo(null, NOMES_COLECOES);
+              if (registros.some((r: any)=>!r.apagadoEm && arquivosDoRegistro(r).includes(idArq))) return null;
+              return {...atual, excluindoEm:atual.excluindoEm || agora()};
+            }) : await lerUm("_arqmeta", idArq);
+            if (linha.colecao === 'orc' && !meta) continue;
             const partes = (meta && meta.partes) || 1;
             const chaves = [idArq + "/meta"];
             for (let i = 0; i < partes; i++) chaves.push(idArq + "/p" + i);
@@ -708,7 +726,9 @@ Deno.serve(async (req) => {
             await apagarDeVez("_arqmeta", idArq);
             arquivos++;
           }
-          await apagarDeVez(linha.colecao, linha.id);
+          if (linha.colecao === 'orc') {
+            if (!await removerOrcamentoSeInalterado(linha.id, reservado)) continue;
+          } else await apagarDeVez(linha.colecao, linha.id);
           apagados++;
         }
         await registrarLog({ acao: "esvaziou a lixeira", por, qtd: apagados, arquivos });
@@ -732,6 +752,12 @@ Deno.serve(async (req) => {
         if (!COLECOES[colecao]) return json({ error: "Coleção desconhecida." }, 400);
         const r = await lerUm(colecao, id);
         if (!r) return json({ ok: false, error: "Não encontrado" }, 404);
+        if (colecao === 'orc') {
+          const restaurado = {...r, apagadoEm:null, apagadoPor:null};
+          const enviado = {...restaurado, _baseExistente:true, _baseRevisao:r._revisao || null, _baseAtualizadoEm:r.atualizadoEm || null};
+          const salvo = await gravar('orc', enviado, por, (atual: any) => validarOrcamentoServidor(restaurado, atual, perfilDe(quem), lerUm, lerTudo, quem, true));
+          return json({ok:true, registro:salvo});
+        }
         delete r.apagadoEm; delete r.apagadoPor;
         r.atualizadoEm = agora(); r.atualizadoPor = por;
         await gravarUm(colecao, id, r);
@@ -1149,15 +1175,25 @@ Deno.serve(async (req) => {
       }
 
       case "restaurar": {
-        const registros = Array.isArray(body.registros) ? body.registros : [];
+        const registros = (Array.isArray(body.registros) ? body.registros : []).filter((r: any)=>r && COLECOES[r._col] && r.id);
+        const basesOrcamento = await conferirRestauracaoOrcamentos(registros, lerUm, lerTudo, quem);
         let n = 0;
         const maiorNumero: Record<string, number> = {};
-        for (const r of registros) {
+        // Fontes precedem orçamentos. O preflight impede erros já conhecidos;
+        // cada CAS continua recusando uma corrida. O backup completo não é uma
+        // única transação e não deve ser anunciado como tal.
+        for (const r of [...registros.filter((r: any)=>r._col !== 'orc'), ...registros.filter((r: any)=>r._col === 'orc')]) {
           const col = r._col;
           if (!COLECOES[col] || !r.id) continue;
           const copia = { ...r };
           delete copia._col;
-          await gravarUm(col, r.id, copia);
+          if (col === 'orc') {
+            copia.apagadoEm = copia.apagadoEm || null; copia.apagadoPor = copia.apagadoPor || null;
+            copia.inativoEm = copia.inativoEm || null;
+            const base = basesOrcamento.get(r.id);
+            const enviado = {...copia, _baseExistente:!!base, _baseRevisao:base?._revisao || null, _baseAtualizadoEm:base?.atualizadoEm || null};
+            await gravar(col, enviado, por, (atual: any)=>validarOrcamentoServidor(copia, atual, perfilDe(quem), lerUm, lerTudo, quem, true));
+          } else await gravarUm(col, r.id, copia);
           if (r.numero) maiorNumero[col] = Math.max(maiorNumero[col] || 0, Number(r.numero) || 0);
           n++;
         }

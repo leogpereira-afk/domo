@@ -29,6 +29,24 @@ test('Upload: dono não finaliza arquivo truncado, mas conclui arquivo íntegro'
  assert.equal((await e.call('finalizar',{id:good},'office')).status,200);assert.equal(e.get('_arqmeta',good).pronto,true);
  assert.equal((await e.call('parte',{id:good,i:0,dados:'AQI='},'office')).status,409);
 });
+test('Upload reservado do orçamento sobrevive à rotina enquanto vínculo está pendente',async()=>{
+ const e=await env('domo-acervo');e.seed('orc',{id:'budget',obraId:'work',origem:{totalCentavos:0},anexos:[]});
+ const start=await e.call('iniciar',{nome:'qa.pdf',mime:'application/pdf',tamanho:2,partes:1,vinculoPendente:{colecao:'orc',registroId:'budget'}},'office');assert.equal(start.status,200);
+ const id=start.body.id;assert.equal(e.get('_arqmeta',id).vinculoPendente.registroId,'budget');
+ assert.equal((await e.call('parte',{id,i:0,dados:'AQI='},'office')).status,200);assert.equal((await e.call('finalizar',{id},'office')).status,200);
+ e.seed('_arqmeta',{...e.get('_arqmeta',id),criadoEm:'2000-01-01'});
+ const routine=await env('domo-rotina',{state:e.state});const cleanup=await routine.call('run');assert.equal(cleanup.body.arquivosOrfaos,0);assert.ok(e.parts.has(id+'/p0'));
+ assert.equal((await e.call('estadoEnvio',{id},'office')).status,200);assert.equal((await e.call('estadoEnvio',{id},'field')).status,403);
+ assert.equal((await e.call('iniciar',{nome:'no',tamanho:2,partes:1,vinculoPendente:{colecao:'orc',registroId:'missing'}},'office')).status,404);
+ assert.equal((await e.call('iniciar',{nome:'no',tamanho:2,partes:1,vinculoPendente:{colecao:'orc',registroId:'budget'}},'field')).status,403);
+});
+test('Orphan cleanup marks exclusion before deleting bytes and refuses upload finalization marked for cleanup',async()=>{
+ const e=await env('domo-rotina');e.seed('_arqmeta',{id:'old-upload',pronto:true,partes:1,criadoEm:'2000-01-01'});e.parts.set('old-upload/p0',new Uint8Array([1]));
+ let exclusionBeforeBytes=false;const del=e.parts.delete.bind(e.parts);e.parts.delete=k=>{exclusionBeforeBytes=!!e.get('_arqmeta','old-upload')?.excluindoEm;return del(k);};
+ assert.equal((await e.call('run')).body.arquivosOrfaos,1);assert.equal(exclusionBeforeBytes,true);
+ const a=await env('domo-acervo');a.seed('_arqmeta',{id:'gc',pronto:true,partes:1,criadoPorId:'u-office',excluindoEm:'2026-10-24'});
+ assert.equal((await a.call('finalizar',{id:'gc'},'office')).status,410);assert.equal((await a.call('estadoEnvio',{id:'gc'},'office')).status,404);
+});
 test('Partes: repetição idêntica é aceita; sobrescrita e índice fora da faixa são negados',async()=>{
  const e=await env('domo-acervo');const {body:{id}}=await e.call('iniciar',{nome:'qa',tamanho:2,partes:1},'office');
  assert.equal((await e.call('parte',{id,i:0,dados:'AQI='},'office')).status,200);

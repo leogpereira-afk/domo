@@ -9,6 +9,7 @@
 export function arquivosDoRegistro(o: any): string[] {
   const ids: string[] = [];
   if (o.arquivoId) ids.push(o.arquivoId);
+  if (o.origem?.pdfArquivoId) ids.push(o.origem.pdfArquivoId);
   for (const v of (o.versoes || [])) if (v && v.arquivoId) ids.push(v.arquivoId);
   for (const r of (o.recebimentos || [])) for (const f of (r.fotos || [])) if (f) ids.push(f);
   for (const d of (o.diario || [])) for (const f of (d.fotos || [])) if (f) ids.push(f);

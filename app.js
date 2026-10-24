@@ -18,7 +18,7 @@ const PERFIS_APP = {
     desc: 'O dia a dia inteiro de compras e obra. Não cria acessos, não mexe nas ' +
       'configurações da empresa e não esvazia a lixeira.',
     telas: ['painel', 'solicitacoes', 'cotacoes', 'compras', 'recebimento', 'servicos',
-      'cronogramas', 'acompanhamento', 'fornecedores', 'prestadores', 'projetos', 'documentos',
+      'cronogramas', 'orcamento', 'acompanhamento', 'fornecedores', 'prestadores', 'projetos', 'documentos',
       'compromissos', 'calendario', 'permutas', 'tabela-diamond', 'drive', 'acessos', 'usuarios']
   },
   obra: {
@@ -67,6 +67,7 @@ const MENU = [
   { rota: 'recebimento', icone: '📦', texto: 'Recebimento', bolha: () => lista('oc').filter((o) => SIT_ESPERANDO.includes(o.situacao)).length },
 
   { grupo: 'Execução' },
+  { rota: 'orcamento', icone: '▤', texto: 'Orçamento Executivo' },
   { rota: 'servicos', icone: '🛠️', texto: 'Ordens de serviço' },
   // Cronograma e acompanhamento de fornecedor são a mesma coisa vista de dois
   // ângulos — vivem numa aba só, com as duas visões lá dentro.
@@ -281,7 +282,7 @@ function limparAparelho() {
   } catch { /* não elimina o diário para contornar erro de armazenamento */ }
   S.senhaHash = ''; S.perfil = 'obra'; S.usuarioId = ''; S.acessoProprio = false;
   S.reg = regVazio(); S.fila = []; S.cfg = null;
-  S.erroSync = ''; S.erroFila = ''; S.erroCache = ''; S.erroArquivos = ''; S.fotosPendentes = 0;
+  S.erroSync = ''; S.erroFila = ''; S.erroCache = ''; S.erroArquivos = ''; S.fotosPendentes = 0; S.arquivosPendentes = [];
   location.hash = '#/painel';
   render();
 }
@@ -297,10 +298,10 @@ async function mostrarPendenciasLocais() {
     pendencias.map((f, i) => '<div class="cartao" style="margin-bottom:8px"><b>' + esc((COLECOES_DOMO[f.colecao] || {}).nome || f.colecao) + ' · ' + esc(f.registro.codigo || f.registro.nome || f.registro.id) + '</b>' +
       '<p>' + esc(f.recusado || (pendencias.filter(x => x.colecao === f.colecao && x.registro.id === f.registro.id).length > 1 ? 'Há versões de abas diferentes. Baixe as cópias antes de revisar.' : 'Aguardando envio')) + '</p>' +
       '<button class="btn pequeno" data-baixarpend="' + i + '">Baixar esta versão</button>' +
-      '<button class="btn pequeno" data-reenviarpend="' + i + '">Reenviar esta versão</button>' +
-      '<a class="btn pequeno" href="#/' + ({ sc:'solicitacoes', oc:'compras', os:'servicos', crono:'cronogramas', forn:'fornecedores', prest:'fornecedores', comp:'compromissos', pessoa:'pessoas', permuta:'permutas', doc:'documentos', proj:'projetos' }[f.colecao] || 'painel') + '/' + encodeURIComponent(f.registro.id) + '" data-revisarpend>Revisar no cadastro</a></div>').join('') +
+      '<button class="btn pequeno" data-reenviarpend="' + i + '">' + (f.confirmado ? 'Concluir cópia offline' : 'Reenviar esta versão') + '</button>' +
+      '<a class="btn pequeno" href="#/' + ({ orc:'orcamento/validacoes', sc:'solicitacoes', oc:'compras', os:'servicos', crono:'cronogramas', forn:'fornecedores', prest:'fornecedores', comp:'compromissos', pessoa:'pessoas', permuta:'permutas', doc:'documentos', proj:'projetos' }[f.colecao] || 'painel') + '/' + encodeURIComponent(f.registro.id) + '" data-revisarpend>Revisar no cadastro</a></div>').join('') +
     (preservadas.length ? '<details><summary>' + preservadas.length + ' versão(ões) anteriores preservadas</summary>' + preservadas.map((f, i) => '<p>' + (f.origem === 'servidor' ? 'Servidor antes do reenvio · ' : 'Versão local · ') + esc(f.registro.codigo || f.registro.nome || f.registro.id) + ' <button class="btn pequeno" data-baixarversao="' + i + '">Baixar versão anterior</button></p>').join('') + '</details>' : '') +
-    arquivos.map((f, i) => '<div class="cartao" style="margin-bottom:8px"><b>' + esc(f.nome || 'Foto') + '</b><p>' + esc(!f.dono ? 'Foto antiga sem dono identificado; baixe e anexe ao recebimento correto.' : 'Aguardando confirmação do vínculo com o recebimento.') + '</p><button class="btn pequeno" data-baixarfoto="' + i + '">Baixar foto</button></div>').join('') +
+    arquivos.map((f, i) => '<div class="cartao" style="margin-bottom:8px"><b>' + esc(f.nome || 'Arquivo') + '</b><p>' + esc(!f.dono ? 'Foto antiga sem dono identificado; baixe e anexe ao recebimento correto.' : f.tipo === 'anexo' ? 'Arquivo preservado; aguardando confirmação do vínculo com o orçamento.' : 'Aguardando confirmação do vínculo com o recebimento.') + '</p><button class="btn pequeno" data-baixarfoto="' + i + '">Baixar arquivo</button></div>').join('') +
     (!pendencias.length && !arquivos.length ? '<p>Nenhuma pendência neste acesso.</p>' : '');
   abrirModal({ titulo: 'Pendências preservadas neste aparelho', corpo, acoes: [{ texto: 'Fechar', aoClicar: () => fecharModal() }] });
   document.querySelectorAll('[data-baixarpend]').forEach(b => b.addEventListener('click', () => {
@@ -309,6 +310,10 @@ async function mostrarPendenciasLocais() {
   }));
   document.querySelectorAll('[data-reenviarpend]').forEach(b => b.addEventListener('click', async () => {
     const f = pendencias[Number(b.dataset.reenviarpend)];
+    if (f.confirmado) {
+      await subirFila();atualizarFila();const falta=S.fila.some(x=>x.op===f.op);
+      fecharModal();render();toast(falta ? S.erroCache || 'Cópia offline ainda aguardando conclusão.' : 'Cópia offline concluída.',falta ? 'ruim' : 'bom');return;
+    }
     if (!navigator.onLine) { toast('Conecte para conferir a versão atual antes de reenviar.', 'ruim'); return; }
     b.disabled = true;
     const dono = donoFila();
@@ -353,6 +358,27 @@ async function mostrarPendenciasLocais() {
           diferentes.map(k => '<tr><th ' + celula + ' scope="row">' + esc(rotulo(k)) + '</th><td ' + celula + '>' + esc(formatar(remoto[k])) + '</td><td ' + celula + '>' + esc(formatar(local[k])) + '</td></tr>').join('') + '</tbody></table>'
         : '<p class="aviso info">Os campos de conteúdo coincidem. Confira os detalhes completos abaixo antes de reenviar.</p>';
       const mostrar = r => r ? '<details><summary>Conferir todos os campos desta versão</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:250px;overflow:auto">' + esc(JSON.stringify(limparParaEnvio(r), (k, v) => k.startsWith('_') ? undefined : v, 2)) + '</pre></details>' : '<p>Registro novo, ainda não encontrado no servidor.</p>';
+      if (f.colecao === 'orc') {
+        const merge = consolidarPendenciaOrcamento(f.op, atual), escolhas = {};
+        const conflitos = merge.conflitos;
+        const revisaoFinanceira = conflitos.some(c => c.caminho.startsWith('consolidacoes.'));
+        const corpo = '<p>Alterações em itens e campos diferentes serão reunidas. As versões anteriores ficam preservadas.</p>' +
+          (conflitos.length ? conflitos.map((c,i)=>'<section class="cartao"><h3>'+esc(c.caminho)+'</h3><p><b>No servidor:</b> '+esc(formatar(c.remoto))+'</p><p><b>Nesta versão:</b> '+esc(formatar(c.local))+'</p>'+
+            (c.caminho.startsWith('consolidacoes.') ? '<p>Este item recebeu duas decisões. Revise a decisão vigente no orçamento antes de consolidar.</p>' : '<label>Manter<select data-conflito-orc="'+i+'"><option value="">Escolha o conteúdo</option><option value="remoto">Conteúdo do servidor</option><option value="local">Conteúdo desta versão</option></select></label>')+'</section>').join('') : '<p>Nenhum campo em conflito: as alterações independentes podem ser consolidadas.</p>') +
+          '<p><a href="#/orcamento/validacoes/'+encodeURIComponent(f.registro.id)+'" data-revisar-orc>Revisar este orçamento</a></p><p data-erro-orc role="alert"></p>' + mostrar(merge.registro);
+        abrirModal({titulo:'Consolidar alterações do orçamento',corpo,acoes:[
+          {texto:'Voltar',aoClicar:fundo=>fecharEste(fundo)},
+          ...(!revisaoFinanceira ? [{texto:'Consolidar e reenviar',classe:'primario',aoClicar:fundo=>{
+            try {
+              if(donoFila()!==dono)throw new Error('A sessão mudou. Abra as pendências novamente.');
+              fundo.querySelectorAll('[data-conflito-orc]').forEach(select=>{if(select.value)escolhas[conflitos[Number(select.dataset.conflitoOrc)].caminho]=select.value;});
+              resolverPendenciaLocal(f.op,atual,escolhas);fecharEste(fundo);fecharModal();render();toast('Alterações consolidadas e preservadas para envio.');
+            } catch(e) { fundo.querySelector('[data-erro-orc]').textContent=e.message; }
+          }}] : [])
+        ]});
+        document.querySelector('[data-revisar-orc]')?.addEventListener('click',()=>{fecharModal();fecharModal();});
+        return;
+      }
       abrirModal({ titulo: 'Conferir antes de reenviar', corpo:
         '<p>Compare as versões. Ao confirmar, a sua versão voltará à fila usando esta conferência como referência. Se o servidor mudar novamente, o reenvio será recusado para nova revisão.</p>' +
         resumo + '<h3>Versão atual no servidor</h3>' + mostrar(atual) + '<h3>Sua versão preservada</h3>' + mostrar(f.registro),

@@ -3,7 +3,7 @@ import {readdirSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 const cwd=fileURLToPath(new URL('../',import.meta.url));
 for(const args of [
-  ['--test','verificar-versoes.cjs','verificar-regras.cjs','tests/sync-preservacao.test.mjs','tests/calculos-regressoes.mjs','tests/sql-cas.test.mjs'],
+  ['--test','tests/orcamento.test.mjs','tests/orcamento-evolucao.test.mjs','tests/orcamento-backend.test.mjs','tests/sql-orcamento.test.mjs','tests/orcamento-server.test.mjs','tests/orcamento-ui.test.mjs','tests/orcamento-dashboard.test.mjs','tests/orcamento-pdf.test.mjs','verificar-versoes.cjs','verificar-regras.cjs','tests/sync-preservacao.test.mjs','tests/calculos-regressoes.mjs','tests/sql-cas.test.mjs'],
   ['tests/server-regressions.mjs'],['tests/server-controls.mjs'],
   ...readdirSync(cwd).filter(f=>f.endsWith('.js')).map(f=>['--check',f])
 ]){

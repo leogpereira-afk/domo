@@ -252,6 +252,7 @@ export function podeLerRegistro(quem: Quem | null, registro: any): boolean {
   if (!quem || !registro) return false;
   const perfil = perfilDe(quem);
   if (perfil === "direcao") return true;
+  if (registro._col === "orc" && perfil === "obra") return false;
   if (COLECOES_SO_DIRECAO.has(registro._col)) return false;
   if (registro._col === "comp") return registro.dono === quem.id;
   return !PERFIS[perfil].le || PERFIS[perfil].le!.includes(registro._col);

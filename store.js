@@ -27,6 +27,7 @@ const COLECOES_DOMO = {
   comp:    { pre: '',   nome: 'Compromisso' },
   pessoa:  { pre: '',   nome: 'Colaborador' },
   permuta: { pre: '',   nome: 'Permuta' },
+  orc: { pre: '', nome: 'Orçamento Executivo' },
 };
 const COLECOES_APP = Object.keys(COLECOES_DOMO);
 const regVazio = () => COLECOES_APP.reduce((a, c) => { a[c] = []; return a; }, {});
@@ -50,7 +51,8 @@ const S = {
   erroCache: '',
   erroFila: '',
   erroArquivos: '',
-  fotosPendentes: 0
+  fotosPendentes: 0,
+  arquivosPendentes: []
 };
 
 const K = {
@@ -177,12 +179,14 @@ function atualizarFila() {
 function restaurarPendencias() {
   atualizarFila();
   const contagem = new Map();
-  for (const f of S.fila) { const k = f.colecao + '|' + f.registro.id; contagem.set(k, (contagem.get(k) || 0) + 1); }
+  for (const f of S.fila.filter(x=>!x.confirmado)) { const k = f.colecao + '|' + f.registro.id; contagem.set(k, (contagem.get(k) || 0) + 1); }
   for (const f of S.fila) {
+    if (f.confirmado && contagem.has(f.colecao + '|' + f.registro.id)) continue;
     const arr = S.reg[f.colecao] || (S.reg[f.colecao] = []);
     const i = arr.findIndex(r => r.id === f.registro.id);
+    if (f.confirmadoSemLeitura) { if(i>=0)arr.splice(i,1);continue; }
     const conflito = contagem.get(f.colecao + '|' + f.registro.id) > 1;
-    const rec = Object.assign({}, f.registro, { _opLocal: f.op, _pendente: !f.recusado && !conflito,
+    const rec = Object.assign({}, f.registro, { _opLocal: f.op, _pendente: !f.confirmado && !f.recusado && !conflito,
       _recusado: f.recusado || (conflito ? 'Alterações em abas diferentes. Confira as versões em Pendências.' : null) });
     if (i >= 0) arr[i] = rec; else arr.unshift(rec);
   }
@@ -312,6 +316,120 @@ function lista(col, incluirApagados = false) {
 
 const achar = (col, id) => (S.reg[col] || []).find((r) => r.id === id) || null;
 
+// Rascunhos pertencem ao acesso, fora da fila de registros e do snapshot remoto.
+const PREFIXO_RASCUNHO_ORC = 'domo_rascunho_orc_v1:';
+const chaveRascunhosOrcamento = dono => PREFIXO_RASCUNHO_ORC + encodeURIComponent(dono) + ':';
+let rascunhosEmGravacao = Promise.resolve();
+async function lerMapaRascunhosOrcamento(dono) {
+  if (!dono) return {};
+  const prefixo = chaveRascunhosOrcamento(dono), mapa = {};
+  if (typeof indexedDB !== 'undefined' && indexedDB) {
+    const chaves = await bancoCache('readonly', st => st.getAllKeys());
+    for (const chave of chaves.filter(k => typeof k === 'string' && k.startsWith(prefixo))) {
+      const item = await bancoCache('readonly', st => st.get(chave));
+      if (item) mapa[item.chave] = item;
+    }
+  } else for (let i=0;i<localStorage.length;i++) {
+    const chave=localStorage.key(i);if (!chave?.startsWith(prefixo))continue;
+    const item=JSON.parse(localStorage.getItem(chave));if(item)mapa[item.chave]=item;
+  }
+  return mapa;
+}
+function atualizarRascunhosOrcamento(chave, payload, remover) {
+  const dono = donoFila();
+  if (!dono) return Promise.reject(new Error('Entre novamente para guardar o rascunho.'));
+  // Serializa desde a captura: a UI pode continuar alterando seu objeto.
+  const copia = payload === undefined ? null : JSON.parse(JSON.stringify(payload));
+  const task = rascunhosEmGravacao.catch(() => {}).then(async () => {
+    const item = { chave, payload: copia, atualizadoEm: new Date().toISOString() };
+    const destino = chaveRascunhosOrcamento(dono) + encodeURIComponent(chave);
+    if (typeof indexedDB !== 'undefined' && indexedDB) await bancoCache('readwrite', st => remover ? st.delete(destino) : st.put(item, destino));
+    else if (remover) localStorage.removeItem(destino);
+    else localStorage.setItem(destino, JSON.stringify(item));
+    if (donoFila() === dono) document.dispatchEvent(new CustomEvent('domo:status'));
+  });
+  rascunhosEmGravacao = task;
+  return task;
+}
+const gravarRascunhoOrcamento = (chave, payload) => atualizarRascunhosOrcamento(chave, payload, false);
+const removerRascunhoOrcamento = chave => atualizarRascunhosOrcamento(chave, undefined, true);
+async function listarRascunhosOrcamento() {
+  const dono = donoFila(); await rascunhosEmGravacao.catch(() => {});
+  const mapa = await lerMapaRascunhosOrcamento(dono);
+  return donoFila() === dono ? Object.values(mapa).sort((a,b) => b.atualizadoEm.localeCompare(a.atualizadoEm)) : [];
+}
+async function lerRascunhoOrcamento(chave) { return (await listarRascunhosOrcamento()).find(x => x.chave === chave)?.payload || null; }
+
+function estadoSalvamento(col, id) {
+  atualizarFila();
+  const operacoes = S.fila.filter(f => f.colecao === col && f.registro.id === id);
+  const arquivos = (S.arquivosPendentes || []).filter(f => f.dono === donoFila() && f.colecao === col && f.registroId === id);
+  const recusado = operacoes.find(f => f.recusado);
+  const erroArquivo = arquivos.find(f => f.erro)?.erro;
+  const conflito = operacoes.length > 1;
+  const estado = recusado || conflito ? 'recusado' : operacoes.length || arquivos.length ? 'pendente' : S.erroCache ? 'erro' : 'sincronizado';
+  return { estado, registrosPendentes: operacoes.length, arquivosPendentes: arquivos.length,
+    mensagem: recusado?.recusado || (conflito ? 'Há versões para consolidar em Pendências.' : operacoes.some(f=>f.confirmado) ? 'Confirmado no servidor; falta concluir a cópia offline.' : erroArquivo ? 'Arquivo preservado: '+erroArquivo : arquivos.length ? 'Arquivo guardado no aparelho; aguardando confirmação do vínculo.' : operacoes.length ? 'Salvo no aparelho; aguardando sincronização.' : S.erroCache || 'Sincronizado.') };
+}
+
+// Três versões permitem unir mudanças independentes sem escolher pelo horário.
+// Só é automático quando um lado permaneceu igual à base ou ambos concordam.
+function consolidarEdicaoOrcamento(base, local, remoto = achar('orc', local.id), escolhas = {}) {
+  const conflitos = [], igual = (a,b) => JSON.stringify(a) === JSON.stringify(b);
+  const clonar = x => x === undefined ? undefined : structuredClone(x);
+  const objeto = x => x && typeof x === 'object' && !Array.isArray(x);
+  const chave = x => objeto(x) ? x.id || x.arquivoId || x.item || (x.em ? x.em + '|' + (x.por || '') : null) : null;
+  function conflito(caminho, antes, editado, atual) {
+    if (escolhas[caminho] === 'local') return clonar(editado);
+    if (escolhas[caminho] === 'remoto') return clonar(atual);
+    conflitos.push({ caminho, base:clonar(antes), local:clonar(editado), remoto:clonar(atual) });
+    return clonar(atual);
+  }
+  function mesclar(antes, editado, atual, caminho) {
+    if (igual(editado, atual)) return clonar(atual);
+    if (caminho !== 'consolidacoes') {
+      if (igual(editado, antes)) return clonar(atual);
+      if (igual(atual, antes)) return clonar(editado);
+    }
+    if (Array.isArray(editado) && Array.isArray(atual)) {
+      const a = Array.isArray(antes) ? antes : [];
+      if (caminho === 'consolidacoes') {
+        // Prefixo aprovado é uma sequência imutável, inclusive sua ordem.
+        const itens = [...new Set([...a,...atual,...editado].map(x => x.item))], bloqueados = new Set();
+        for (const item of itens) {
+          const anteriores=a.filter(x=>x.item===item), locais=editado.filter(x=>x.item===item), remotas=atual.filter(x=>x.item===item);
+          const novasLocais=locais.filter(x=>!anteriores.some(b=>b.id===x.id)&&!remotas.some(r=>r.id===x.id));
+          const novasRemotas=remotas.filter(x=>!anteriores.some(b=>b.id===x.id));
+          const mudouHistorico=anteriores.some(b=>!igual(b,locais.find(x=>x.id===b.id)));
+          if (mudouHistorico || (novasLocais.length && novasRemotas.length)) {
+            conflitos.push({caminho:caminho+'.'+item,base:clonar(anteriores),local:clonar(locais),remoto:clonar(remotas)});
+            bloqueados.add(item);
+          }
+        }
+        return [...clonar(atual),...editado.filter(x=>!bloqueados.has(x.item)&&!atual.some(r=>r.id===x.id)).map(clonar)];
+      }
+      if ([a,editado,atual].every(xs => xs.every(x=>chave(x)) && new Set(xs.map(chave)).size === xs.length)) {
+        const ids=[...new Set([...atual,...editado,...a].map(chave))];
+        return ids.map(id=>mesclar(a.find(x=>chave(x)===id),editado.find(x=>chave(x)===id),atual.find(x=>chave(x)===id),caminho+'.'+id)).filter(x=>x!==undefined);
+      }
+    }
+    if (objeto(editado) && objeto(atual) && (antes === undefined || objeto(antes))) {
+      const saida = {};
+      for (const k of new Set([...Object.keys(antes||{}),...Object.keys(editado),...Object.keys(atual)])) {
+        const valor = mesclar(antes?.[k], editado[k], atual[k], caminho ? caminho+'.'+k : k);
+        if (valor !== undefined) saida[k] = valor;
+      }
+      return saida;
+    }
+    return conflito(caminho,antes,editado,atual);
+  }
+  // Metadados de sincronização não são campos editáveis nem conflitos humanos.
+  const limpar = value => { const r=clonar(value);if(r)for(const k of Object.keys(r))if(k.startsWith('_')||['atualizadoEm','atualizadoPor'].includes(k))delete r[k];return r; };
+  const registro = mesclar(limpar(base),limpar(local),limpar(remoto),'');
+  if (registro && remoto) for (const k of Object.keys(remoto)) if (k.startsWith('_') || ['atualizadoEm','atualizadoPor'].includes(k)) registro[k]=clonar(remoto[k]);
+  return { registro, conflitos };
+}
+
 /* ── Gravação ──────────────────────────────────────────────────────────────── */
 // Salva no aparelho na hora e empurra pra fila. Devolve o registro local.
 function salvar(col, registro, opts = {}) {
@@ -347,6 +465,16 @@ function salvar(col, registro, opts = {}) {
   const ancestrais = new Set(substitui);
   for (const antiga of substitui) { try { const f = JSON.parse(localStorage.getItem(chaveOperacao(antiga))); for (const id of (f && f.ancestrais || [])) ancestrais.add(id); } catch { /* origem continua preservada */ } }
   const f = { op, dono, em: local.atualizadoEm, colecao: col, registro: local, seq: ++S.seqFila, substitui, ancestrais: [...ancestrais] };
+  if (col === 'orc') {
+    let origem;
+    try { origem = baseOp && JSON.parse(localStorage.getItem(chaveOperacao(baseOp)) || 'null'); } catch { /* conserva base explícita */ }
+    if (opts.substitui && Object.hasOwn(opts, 'baseRegistro')) f.baseRegistro = structuredClone(opts.baseRegistro);
+    else if (origem?.confirmado) f.baseRegistro = structuredClone(origem.registro);
+    else if (origem && Object.hasOwn(origem, 'baseRegistro')) f.baseRegistro = origem.baseRegistro;
+    else if (Object.hasOwn(opts, 'baseRegistro')) f.baseRegistro = structuredClone(opts.baseRegistro);
+    else if (!baseOp && anterior && !anterior._pendente && !anterior._recusado) f.baseRegistro = structuredClone(anterior);
+    else if (!anterior) f.baseRegistro = null;
+  }
   gravarOperacao(f);
   // Só limpar versões substituídas depois de gravar o sucessor completo.
   for (const antiga of substitui) localStorage.removeItem(chaveOperacao(antiga));
@@ -372,7 +500,20 @@ function versoesLocaisPreservadas() {
   }
   return itens;
 }
-function resolverPendenciaLocal(op, baseConfirmada) {
+function consolidarPendenciaOrcamento(op, remoto, escolhas = {}) {
+  atualizarFila();
+  const escolhida = S.fila.find(f=>f.op===op);
+  if (!escolhida) throw new Error('Essa versão já foi atualizada. Abra Pendências novamente.');
+  const versoes = S.fila.filter(f=>f.colecao==='orc'&&f.registro.id===escolhida.registro.id&&f.op!==op).concat(escolhida);
+  let registro = remoto, conflitos = [];
+  for (const versao of versoes) {
+    if (!Object.hasOwn(versao,'baseRegistro')) throw new Error('Esta pendência não tem base completa para consolidar. Baixe a versão e revise os itens no orçamento antes de reenviar.');
+    const r=consolidarEdicaoOrcamento(versao.baseRegistro,versao.registro,registro,escolhas);
+    registro=r.registro;conflitos.push(...r.conflitos);
+  }
+  return {registro,conflitos};
+}
+function resolverPendenciaLocal(op, baseConfirmada, escolhas = {}) {
   atualizarFila();
   const escolhida = S.fila.find(f => f.op === op);
   if (!escolhida) throw new Error('Essa versão já foi atualizada. Abra Pendências novamente.');
@@ -388,18 +529,23 @@ function resolverPendenciaLocal(op, baseConfirmada) {
     }
   }
   catch { throw new Error('Não há espaço para preservar as versões anteriores. Baixe as cópias e libere espaço antes de reenviar.'); }
-  const registro = Object.assign({}, escolhida.registro);
+  let registro = Object.assign({}, escolhida.registro);
+  if (escolhida.colecao === 'orc' && baseConfirmada !== undefined) {
+    const resultado = consolidarPendenciaOrcamento(op, baseConfirmada, escolhas);
+    if (resultado.conflitos.length) throw new Error('Há alterações no mesmo campo. Escolha cada conflito antes de reenviar.');
+    registro = resultado.registro;
+  }
   if (baseConfirmada !== undefined) {
     registro._baseExistente = !!baseConfirmada;
     registro._baseRevisao = baseConfirmada && baseConfirmada._revisao || null;
     registro._baseAtualizadoEm = baseConfirmada && baseConfirmada.atualizadoEm || null;
   }
-  return salvar(escolhida.colecao, registro, { substitui: versoes.map(f => f.op) });
+  return salvar(escolhida.colecao, registro, { substitui: versoes.map(f => f.op), ...(escolhida.colecao === 'orc' ? {baseRegistro:baseConfirmada} : {}) });
 }
 
 /* Contagem de fotos ainda guardadas no aparelho, para a tela poder dizer. */
 async function fotosAindaNoAparelho() {
-  try { const itens = (await filaArqListar()) || []; S.fotosPendentes = itens.filter(x => !x.dono || x.dono === donoFila()).length; return S.fotosPendentes; }
+  try { const itens = (await filaArqListar()) || []; S.arquivosPendentes = itens.filter(x => !x.dono || x.dono === donoFila()); S.fotosPendentes = S.arquivosPendentes.length; return S.fotosPendentes; }
   catch { S.erroArquivos = 'Não foi possível conferir as fotos guardadas neste aparelho.'; return null; }
 }
 
@@ -417,7 +563,9 @@ function historiar(registro, o_que) {
 
 let _subindo = false;
 async function subirFila() {
-  if (_subindo || !navigator.onLine || !S.senhaHash) return false;
+  if (_subindo || !S.senhaHash) return false;
+  atualizarFila();
+  if (!navigator.onLine && !S.fila.some(f=>f.confirmado)) return false;
   _subindo = true;
   try {
     // Web Locks serializa envios entre abas. O diário por operação garante
@@ -430,6 +578,30 @@ async function enviarFilaDuravel() {
   try { migrarFilaAntiga(); } catch { S.erroFila = 'Migração de pendências incompleta: os dados originais foram preservados.'; }
   atualizarFila();
   if (S.erroFila) return false;
+  // Um ACK já é definitivo. Depois de falha de cache, falta somente concluir
+  // sua cópia local; reenviar a versão pré-carimbo pode violar o histórico.
+  const aguardandoCopia = S.fila.filter(f=>f.confirmado);
+  if (aguardandoCopia.length) {
+    const donoCopia=donoFila();
+    for (const f of aguardandoCopia) {
+      if (S.fila.some(x=>!x.confirmado&&x.colecao===f.colecao&&x.registro.id===f.registro.id)) continue;
+      const arr=S.reg[f.colecao] || (S.reg[f.colecao]=[]),i=arr.findIndex(x=>x.id===f.registro.id);
+      if (f.confirmadoSemLeitura) { if(i>=0)arr.splice(i,1); }
+      else {
+        const r={...limparParaEnvio(f.registro),_col:f.colecao};
+        if(i>=0)arr[i]=r;else arr.unshift(r);
+      }
+    }
+    const copiaConcluida=await gravarCache();
+    if (donoFila()!==donoCopia) return false;
+    if (!copiaConcluida) {
+      S.erroSync='Envio confirmado; falta concluir a cópia offline. O registro canônico permanece neste aparelho.';
+      restaurarPendencias();return false;
+    }
+    for(const f of aguardandoCopia)localStorage.removeItem(chaveOperacao(f.op));
+    restaurarPendencias();S.erroSync='';
+  }
+  if (!navigator.onLine) return !S.fila.length;
   const contagem = new Map();
   for (const f of S.fila) { const k = f.colecao + '|' + f.registro.id; contagem.set(k, (contagem.get(k) || 0) + 1); }
   const enviando = S.fila.filter(f => !f.recusado && contagem.get(f.colecao + '|' + f.registro.id) === 1).slice(0, 25);
@@ -452,8 +624,28 @@ async function enviarFilaDuravel() {
         atualizarFila();
         for (const proxima of S.fila) {
           if (!(proxima.ancestrais || []).includes(f.op) || proxima.registro._baseRevisao !== f.registro._baseRevisao || proxima.registro._baseAtualizadoEm !== f.registro._baseAtualizadoEm) continue;
+          const salvo = salvos.get(f.colecao + '|' + f.registro.id);
+          if (proxima.colecao === 'orc' && salvo) {
+            const canonico = consolidarEdicaoOrcamento(f.registro,proxima.registro,salvo);
+            if (canonico.conflitos.length) {
+              proxima.recusado='O servidor confirmou a versão anterior, mas há campos que precisam de conferência antes do próximo envio.';
+              gravarOperacao(proxima);continue;
+            }
+            // Campos operacionais pertencem ao sucessor; o conteúdo do prefixo
+            // vem do ACK canônico, inclusive autoria e horário do servidor.
+            proxima.registro={...canonico.registro,_opLocal:proxima.op,_pendente:true,_recusado:null};
+            proxima.baseRegistro=structuredClone(salvo);
+          }
           proxima.registro._baseExistente = true; proxima.registro._baseRevisao = confirmado._revisao || null; proxima.registro._baseAtualizadoEm = confirmado.atualizadoEm || null;
           gravarOperacao(proxima);
+        }
+        if (localStorage.getItem(chaveOperacao(f.op))) {
+          const salvo=salvos.get(f.colecao+'|'+f.registro.id);
+          const canonico=salvo || {id:f.registro.id};
+          // Troca atômica por sua resposta oficial antes de depender do cache.
+          // A base anterior deixa de ser necessária para uma operação concluída.
+          gravarOperacao({...f,confirmado:true,confirmadoSemLeitura:!salvo,recusado:null,baseRegistro:undefined,
+            registro:{...canonico,_baseExistente:true,_baseRevisao:confirmado._revisao || null,_baseAtualizadoEm:confirmado.atualizadoEm || null}});
         }
         operacoesConfirmadas.add(f.op);
       }
@@ -477,7 +669,7 @@ async function enviarFilaDuravel() {
     // que o snapshot completo foi confirmado pela transação do IndexedDB.
     const envioIncompleto = incompleto;
     const copiaConfirmada = await gravarCache();
-    if (copiaConfirmada || typeof indexedDB === 'undefined' || !indexedDB) {
+    if (copiaConfirmada) {
       for (const op of operacoesConfirmadas) localStorage.removeItem(chaveOperacao(op));
     } else incompleto = true;
     if (donoFila() !== dono) return false;
@@ -625,15 +817,24 @@ function base64ParaBytes(b64) {
 // Sobe um File em partes. onProgresso(0..1) pra barra de progresso.
 // Cada parte tem 3 tentativas: no 4G da obra uma falha isolada no meio de uma
 // planta de 40MB não pode jogar fora o upload inteiro.
-async function enviarArquivo(file, onProgresso, cancelar) {
+async function enviarArquivo(file, onProgresso, cancelar, opts = {}) {
   const partes = Math.max(1, Math.ceil(file.size / TAM_PARTE));
   const dono = donoFila();
   const sessao = { senhaHash: S.senhaHash, quem: S.quem };
   const conferirSessao = () => { if (!dono || donoFila() !== dono) { const e = new Error('A sessão mudou. O arquivo continua guardado no aparelho.'); e.status = 401; throw e; } };
   conferirSessao();
-  const ini = await apiArq('iniciar', {
-    nome: file.name, mime: file.type || 'application/octet-stream', tamanho: file.size, partes
+  let ini;
+  if (opts.uploadId) {
+    const estado = await apiArq('estadoEnvio',{id:opts.uploadId},{sessao});
+    conferirSessao();
+    if (estado.meta?.pronto) return estado.meta;
+    ini = {id:opts.uploadId,meta:estado.meta};
+  } else ini = await apiArq('iniciar', {
+    nome: file.name, mime: file.type || 'application/octet-stream', tamanho: file.size, partes,
+    ...(opts.vinculoPendente ? {vinculoPendente:opts.vinculoPendente} : {})
   }, { sessao });
+  conferirSessao();
+  if (opts.onIniciado) await opts.onIniciado(ini.id);
   for (let i = 0; i < partes; i++) {
     if (cancelar && cancelar.pedido) throw new Error('envio cancelado');
     const pedaco = file.slice(i * TAM_PARTE, Math.min(file.size, (i + 1) * TAM_PARTE));
@@ -654,6 +855,7 @@ async function enviarArquivo(file, onProgresso, cancelar) {
   }
   conferirSessao();
   const fim = await apiArq('finalizar', { id: ini.id }, { sessao });
+  conferirSessao();
   return fim.meta || ini.meta;
 }
 
@@ -723,6 +925,67 @@ const filaArqGravar = (item) => comFila('readwrite', (st) => st.put(item));
 const filaArqListar = () => comFila('readonly', (st) => st.getAll());
 const filaArqApagar = (id) => comFila('readwrite', (st) => st.delete(id));
 
+const progressoArquivos = new Map();
+async function anexarArquivoDuravel({file, colecao, registroId, onProgresso}) {
+  const dono = donoFila(), registro = achar(colecao, registroId);
+  if (!dono || !registro || registro.apagadoEm) throw new Error('Abra um registro válido antes de anexar.');
+  if (colecao !== 'orc' || !['direcao','escritorio'].includes(S.perfil)) throw new Error('Seu acesso não permite anexar a este orçamento.');
+  if (!file || !file.size) throw new Error('Selecione um arquivo com conteúdo.');
+  const item = {id:'fa-'+novaOperacao(), tipo:'anexo', dono, blob:file, nome:file.name, mime:file.type,
+    em:new Date().toISOString(), colecao, registroId};
+  await filaArqGravar(item); // Nenhuma chamada remota antes de confirmar o Blob.
+  const progresso = {onProgresso,arquivoId:null};
+  progressoArquivos.set(item.id,progresso);
+  await fotosAindaNoAparelho();
+  document.dispatchEvent(new CustomEvent('domo:status'));
+  if (donoFila() === dono) await subirArquivosPendentes();
+  const restante = ((await filaArqListar()) || []).find(x=>x.id===item.id);
+  if (!restante) progressoArquivos.delete(item.id);
+  return {pendente:!!restante,arquivoId:restante?.arquivoId || progresso.arquivoId,filaId:item.id};
+}
+
+async function enviarAnexoDuravel(item, dono) {
+  let reg = achar(item.colecao,item.registroId);
+  if (!reg || reg.apagadoEm) throw new Error('O orçamento ainda não está disponível para vincular o arquivo.');
+  await subirFila(); // Um orçamento novo precisa existir antes da reserva do upload.
+  if (donoFila() !== dono) return;
+  if (item.arquivoId) {
+    try { await apiArq('estadoEnvio',{id:item.arquivoId}); }
+    catch (e) {
+      if (e.status !== 404) throw e;
+      item.arquivoAnteriorId = item.arquivoId;
+      delete item.arquivoId; delete item.meta; delete item.uploadId;
+      await filaArqGravar(item);
+    }
+  }
+  if (!item.arquivoId) {
+    if (item.uploadId) {
+      try { await apiArq('estadoEnvio',{id:item.uploadId}); }
+      catch (e) { if(e.status!==404)throw e;delete item.uploadId;await filaArqGravar(item); }
+    }
+    const meta = await enviarArquivo(new File([item.blob],item.nome,{type:item.mime || 'application/octet-stream'}),progressoArquivos.get(item.id)?.onProgresso,null,{
+      vinculoPendente:{colecao:item.colecao,registroId:item.registroId},uploadId:item.uploadId,
+      onIniciado:async id=>{item.uploadId=id;await filaArqGravar(item);}
+    });
+    item.arquivoId=meta.id;item.meta={id:meta.id,arquivoId:meta.id,nome:item.nome,mime:meta.mime || item.mime,tamanho:meta.tamanho || item.blob.size};
+    if (progressoArquivos.has(item.id)) progressoArquivos.get(item.id).arquivoId=meta.id;
+    await filaArqGravar(item);
+  }
+  if (donoFila() !== dono) return;
+  reg = achar(item.colecao,item.registroId);
+  if (!reg || reg.apagadoEm) throw new Error('O orçamento não está disponível. O arquivo permanece guardado.');
+  if (!(reg.anexos || []).some(a=>a.arquivoId===item.arquivoId)) {
+    const copia = {...reg,anexos:[...(reg.anexos || []).filter(a=>a.arquivoId!==item.arquivoAnteriorId),item.meta]};
+    salvar(item.colecao,copia,{semSubir:true,baseRegistro:reg});
+  }
+  await subirFila(); atualizarFila();
+  reg = achar(item.colecao,item.registroId);
+  const pendente = S.fila.some(f=>f.colecao===item.colecao&&f.registro.id===item.registroId);
+  if (donoFila() === dono && !pendente && reg && (reg.anexos || []).some(a=>a.arquivoId===item.arquivoId)) {
+    await filaArqApagar(item.id);progressoArquivos.delete(item.id);
+  } else S.erroArquivos='Arquivo guardado no aparelho; aguardando confirmação do vínculo no servidor.';
+}
+
 /* Anexa uma foto a um sub-item de um registro (ex.: as fotos de UM recebimento
    dentro da ordem). Tenta subir agora; se não der, guarda o arquivo no aparelho
    e devolve pendente:true — quem chamou avisa a pessoa, e subirFila() termina o
@@ -763,6 +1026,8 @@ async function enviarArquivosDaSessao(dono) {
     if (!item.dono) { S.erroArquivos = 'Há fotos antigas sem dono identificado. Recupere-as em Pendências.'; continue; }
     if (item.dono !== dono || donoFila() !== dono) continue;
     try {
+      delete item.erro;
+      if (item.tipo === 'anexo') { await enviarAnexoDuravel(item,dono); continue; }
       let reg = achar(item.colecao, item.registroId);
       let sub = reg && (reg[item.subLista] || []).find(x => x.id === item.subId);
       if (!reg || reg.apagadoEm || !sub || sub.apagadoEm) { S.erroArquivos = 'Foto guardada: o recebimento ainda não está disponível para vincular.'; continue; }
@@ -789,7 +1054,11 @@ async function enviarArquivosDaSessao(dono) {
       const aguardando = S.fila.some(f => f.colecao === item.colecao && f.registro.id === item.registroId);
       if (!aguardando && sub && (sub[item.campo] || []).includes(item.arquivoId)) await filaArqApagar(item.id);
       else S.erroArquivos = 'Foto guardada no aparelho; aguardando confirmação do vínculo no servidor.';
-    } catch (e) { S.erroArquivos = 'Foto preservada no aparelho: ' + (e.message || 'envio pendente'); break; }
+    } catch (e) {
+      item.erro=e.message || 'envio pendente';
+      try { await filaArqGravar(item); } catch { /* o Blob anterior continua preservado */ }
+      S.erroArquivos = 'Arquivo preservado no aparelho: ' + item.erro; break;
+    }
   }
 }
 

@@ -112,6 +112,16 @@ Deno.serve(async (req) => {
             !Number.isSafeInteger(partes) || partes < 1 || partes > 1000 || partes > tamanho) {
           return json({ ok: false, error: "Tamanho ou quantidade de partes inválidos." }, 400);
         }
+        let vinculoPendente;
+        if (body.vinculoPendente) {
+          const destino = body.vinculoPendente;
+          if (destino.colecao !== 'orc' || typeof destino.registroId !== 'string' || !destino.registroId || destino.registroId.length > 300) return json({error:'Destino do anexo inválido.'},400);
+          if (!['direcao','escritorio'].includes(perfilDe(eu))) return json({error:'Seu acesso não permite anexar a este orçamento.',semPermissao:true},403);
+          const registro = await lerUm('orc',destino.registroId);
+          if (!registro || registro.apagadoEm) return json({error:'O orçamento precisa estar sincronizado antes do envio do anexo.'},404);
+          if (!podeLerRegistro(eu,{...registro,_col:'orc'})) return json({error:'Seu acesso não permite este orçamento.',semPermissao:true},403);
+          vinculoPendente = {colecao:'orc',registroId:destino.registroId};
+        }
         const id = idNovo() + Math.random().toString(36).slice(2, 6);
         const meta = {
           id,
@@ -128,6 +138,7 @@ Deno.serve(async (req) => {
           criadoPor: quem,
           criadoPorId: eu.id,
           pronto: false,
+          ...(vinculoPendente ? {vinculoPendente} : {}),
         };
         await gravarUm(META, id, meta);
         return json({ ok: true, id, meta });
@@ -143,6 +154,7 @@ Deno.serve(async (req) => {
         if (!Number.isInteger(idx) || idx < 0) return json({ ok: false, error: "Índice de parte inválido" }, 400);
         const meta = await lerUm(META, id);
         if (!meta) return json({ ok: false, error: "Arquivo não encontrado" }, 404);
+        if (meta.excluindoEm) return json({error:'Arquivo em remoção. Reenvie o arquivo preservado.'},410);
         // Arquivo já FINALIZADO não aceita novo pedaço: sem isso, qualquer um
         // sobrescrevia a planta aprovada com lixo e ninguém via (o mesmo nome,
         // o mesmo "pronto", conteúdo corrompido).
@@ -163,7 +175,7 @@ Deno.serve(async (req) => {
           }
         } else await subirParte(id + "/p" + idx, bytes); // Storage não permite sobrescrever.
         const atualizado = await atualizarRegistro(META, id, (atual: any) => {
-          if (!atual || !donoDoEnvio(eu, atual)) throw new Error("Envio não disponível.");
+          if (!atual || atual.excluindoEm || !donoDoEnvio(eu, atual)) throw new Error("Envio não disponível.");
           return { ...atual, recebidas: Math.max(Number(atual.recebidas) || 0, idx + 1) };
         });
         return json({ ok: true, recebidas: atualizado.recebidas, partes: atualizado.partes });
@@ -172,6 +184,7 @@ Deno.serve(async (req) => {
       case "finalizar": {
         const meta = await lerUm(META, body.id);
         if (!meta) return json({ ok: false, error: "Arquivo não encontrado" }, 404);
+        if (meta.excluindoEm) return json({error:'Arquivo em remoção. Reenvie o arquivo preservado.'},410);
         if (!donoDoEnvio(eu, meta)) return json({ ok: false, error: "Este envio é de outra pessoa", semPermissao: true }, 403);
         if (meta.pronto) return json({ ok: true, meta });
         let tamanhoReal = 0;
@@ -185,7 +198,7 @@ Deno.serve(async (req) => {
         }
         if (tamanhoReal !== meta.tamanho) return json({ ok: false, error: "Arquivo incompleto: o tamanho recebido difere do original." }, 400);
         const pronto = await atualizarRegistro(META, body.id, (atual: any) => {
-          if (!atual || !donoDoEnvio(eu, atual) || atual.tamanho !== meta.tamanho || atual.partes !== meta.partes) throw new Error("O envio mudou. Confira e tente novamente.");
+          if (!atual || atual.excluindoEm || !donoDoEnvio(eu, atual) || atual.tamanho !== meta.tamanho || atual.partes !== meta.partes) throw new Error("O envio mudou. Confira e tente novamente.");
           return { ...atual, pronto: true, concluidoEm: atual.concluidoEm || agora() };
         });
         return json({ ok: true, meta: pronto });
@@ -198,6 +211,15 @@ Deno.serve(async (req) => {
           return json({ error: "Seu acesso não permite este arquivo.", semPermissao: true }, 403);
         }
         return json({ ok: true, meta });
+      }
+
+      // Confirmação/retomada do próprio upload, inclusive antes do vínculo.
+      // Não concede download de arquivos órfãos a outro usuário.
+      case "estadoEnvio": {
+        const meta = await lerUm(META,body.id);
+        if (!meta || meta.excluindoEm) return json({error:'Arquivo não encontrado'},404);
+        if (!donoDoEnvio(eu,meta)) return json({error:'Este envio é de outra pessoa',semPermissao:true},403);
+        return json({ok:true,meta});
       }
 
       case "baixarParte": {
