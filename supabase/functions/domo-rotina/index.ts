@@ -71,6 +71,8 @@ Deno.serve(async (req) => {
     resultado.arquivos = arquivos.length;
   } catch (e) {
     resultado.erroBackup = (e as Error)?.message || String(e);
+    await registrarLog({ acao: "rotina interrompida: backup falhou", por: "sistema", ...resultado });
+    return json({ ...resultado, limpezaInterrompida: true }, 503);
   }
 
   // 2. Backups com mais de 60 dias
@@ -93,11 +95,15 @@ Deno.serve(async (req) => {
     // Coleta TUDO antes de apagar: paginar por offset enquanto se apaga da
     // mesma tabela pularia linhas (o conjunto encolhe sob o cursor).
     const data = await lerApagados();
+    const registros = await lerTudo(null, NOMES_COLECOES);
+    const preservados = registros.filter((r: any) => !r.apagadoEm || r.apagadoEm >= limite);
+    const usados = new Set(preservados.flatMap(arquivosDoRegistro));
     let apagados = 0;
     for (const linha of data) {
       const o = linha.registro as any;
       if (!o.apagadoEm || o.apagadoEm >= limite) continue;
       for (const idArq of arquivosDoRegistro(o)) {
+        if (usados.has(idArq)) continue;
         const meta = await lerUm(META, idArq);
         const chaves: string[] = [];
         for (let i = 0; i < ((meta && meta.partes) || 1); i++) chaves.push(idArq + "/p" + i);

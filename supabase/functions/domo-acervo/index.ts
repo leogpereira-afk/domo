@@ -12,7 +12,7 @@
 //   <id>/p0, p1 → os pedaços
 // ============================================================================
 import { json, preflight } from "../_shared/cors.ts";
-import { identificar, perfilDe, podeFazer, COLECOES_SO_DIRECAO } from "../_shared/acesso.ts";
+import { identificar, perfilDe, podeFazer, podeLerRegistro, COLECOES_SO_DIRECAO } from "../_shared/acesso.ts";
 import { NOMES_COLECOES } from "../_shared/colecoes.ts";
 import { arquivosDoRegistro } from "../_shared/arquivos.ts";
 import {
@@ -26,7 +26,7 @@ import {
   baixarParte,
   apagarArquivo,
   apagarDeVez,
-  lerColecaoBruta,
+  lerColecaoBruta, atualizarRegistro,
 } from "../_shared/dados.ts";
 
 // Coleção interna: guarda o "meta" de cada arquivo (nome, tamanho, partes).
@@ -49,17 +49,20 @@ async function podeBaixar(eu: any, arquivoId: string): Promise<boolean> {
   const perfil = perfilDe(eu);
   if (perfil === "direcao") return true;                    // direção: tudo
   const registros = await lerTudo(null, NOMES_COLECOES);
-  for (const o of registros) {
-    if (!arquivosDoRegistro(o).includes(arquivoId)) continue;
-    if (COLECOES_SO_DIRECAO.has(o._col)) return false;      // RH: nem o escritório
-    if (perfil !== "obra") return true;                     // escritório: o resto tudo
-    if (o._col === "comp") return o.dono === eu.id;         // obra: só a própria agenda
-    return COLECAO_ARQ_OBRA.has(o._col);
-  }
+  const donos = registros.filter((o: any) => arquivosDoRegistro(o).includes(arquivoId));
+  // Um arquivo compartilhado com RH/agenda privada mantém a regra mais restrita.
+  if (donos.length) return donos.every((o: any) =>
+    podeLerRegistro(eu, o) && (perfil !== "obra" || o._col === "comp" || COLECAO_ARQ_OBRA.has(o._col)));
+
   // Arquivo órfão (nenhum registro o referencia): só a direção. Um ASO/anexo que
   // sobre no bucket não pode virar porta dos fundos para o escritório — direção
   // já devolveu true lá em cima, então aqui é sempre não.
   return false;
+}
+
+function donoDoEnvio(eu: any, meta: any): boolean {
+  // Uploads antigos sem id de autor só podem ser concluídos pela direção.
+  return perfilDe(eu) === "direcao" || (meta.criadoPorId && meta.criadoPorId === eu.id);
 }
 
 const b64ParaBytes = (b64: string) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
@@ -104,6 +107,11 @@ Deno.serve(async (req) => {
 
       // Abre um arquivo novo e devolve o id que as partes vão usar.
       case "iniciar": {
+        const tamanho = Number(body.tamanho), partes = Number(body.partes);
+        if (!Number.isSafeInteger(tamanho) || tamanho < 1 || tamanho > 500 * 1024 * 1024 ||
+            !Number.isSafeInteger(partes) || partes < 1 || partes > 1000 || partes > tamanho) {
+          return json({ ok: false, error: "Tamanho ou quantidade de partes inválidos." }, 400);
+        }
         const id = idNovo() + Math.random().toString(36).slice(2, 6);
         const meta = {
           id,
@@ -118,6 +126,7 @@ Deno.serve(async (req) => {
           recebidas: 0,
           criadoEm: agora(),
           criadoPor: quem,
+          criadoPorId: eu.id,
           pronto: false,
         };
         await gravarUm(META, id, meta);
@@ -140,30 +149,46 @@ Deno.serve(async (req) => {
         if (meta.pronto) return json({ ok: false, error: "Arquivo já finalizado" }, 409);
         // Só quem começou o upload manda os pedaços dele (a direção destrava
         // qualquer um). Impede escrever por cima do arquivo em andamento de outro.
-        if (perfilDe(eu) !== "direcao" && meta.criadoPor && meta.criadoPor !== quem) {
+        if (!donoDoEnvio(eu, meta)) {
           return json({ ok: false, error: "Este envio é de outra pessoa", semPermissao: true }, 403);
         }
+        if (idx >= meta.partes) return json({ ok: false, error: "Parte fora do arquivo." }, 400);
         if (typeof dados !== "string") return json({ ok: false, error: "Parte vazia" }, 400);
-        await subirParte(id + "/p" + idx, b64ParaBytes(dados));
-        meta.recebidas = Math.max(Number(meta.recebidas) || 0, idx + 1);
-        await gravarUm(META, id, meta);
-        return json({ ok: true, recebidas: meta.recebidas, partes: meta.partes });
+        const bytes = b64ParaBytes(dados);
+        if (!bytes.length || bytes.length > meta.tamanho || bytes.length > 2.5 * 1024 * 1024) return json({ ok: false, error: "Tamanho da parte inválido." }, 400);
+        const existente = await baixarParte(id + "/p" + idx);
+        if (existente) {
+          if (existente.length !== bytes.length || existente.some((b: number, i: number) => b !== bytes[i])) {
+            return json({ ok: false, error: "Esta parte já foi recebida com outro conteúdo. Reinicie o envio." }, 409);
+          }
+        } else await subirParte(id + "/p" + idx, bytes); // Storage não permite sobrescrever.
+        const atualizado = await atualizarRegistro(META, id, (atual: any) => {
+          if (!atual || !donoDoEnvio(eu, atual)) throw new Error("Envio não disponível.");
+          return { ...atual, recebidas: Math.max(Number(atual.recebidas) || 0, idx + 1) };
+        });
+        return json({ ok: true, recebidas: atualizado.recebidas, partes: atualizado.partes });
       }
 
       case "finalizar": {
         const meta = await lerUm(META, body.id);
         if (!meta) return json({ ok: false, error: "Arquivo não encontrado" }, 404);
+        if (!donoDoEnvio(eu, meta)) return json({ ok: false, error: "Este envio é de outra pessoa", semPermissao: true }, 403);
+        if (meta.pronto) return json({ ok: true, meta });
+        let tamanhoReal = 0;
         // Não confia só no contador: confere pedaço por pedaço no Storage, como
         // o backend antigo fazia. Um contador certo com uma parte que não subiu
         // deixaria o arquivo "pronto" e corrompido.
         for (let i = 0; i < (meta.partes || 1); i++) {
           const p = await baixarParte(body.id + "/p" + i);
           if (!p) return json({ ok: false, error: "Falta a parte " + i + " de " + meta.partes }, 400);
+          tamanhoReal += p.byteLength;
         }
-        meta.pronto = true;
-        meta.concluidoEm = agora();
-        await gravarUm(META, body.id, meta);
-        return json({ ok: true, meta });
+        if (tamanhoReal !== meta.tamanho) return json({ ok: false, error: "Arquivo incompleto: o tamanho recebido difere do original." }, 400);
+        const pronto = await atualizarRegistro(META, body.id, (atual: any) => {
+          if (!atual || !donoDoEnvio(eu, atual) || atual.tamanho !== meta.tamanho || atual.partes !== meta.partes) throw new Error("O envio mudou. Confira e tente novamente.");
+          return { ...atual, pronto: true, concluidoEm: atual.concluidoEm || agora() };
+        });
+        return json({ ok: true, meta: pronto });
       }
 
       case "meta": {
@@ -192,6 +217,11 @@ Deno.serve(async (req) => {
       case "apagar": {
         const meta = await lerUm(META, body.id);
         if (!meta) return json({ ok: true });
+        if (!donoDoEnvio(eu, meta)) return json({ error: "Seu acesso não permite apagar este arquivo.", semPermissao: true }, 403);
+        const registros = await lerTudo(null, NOMES_COLECOES);
+        if (registros.some((r: any) => arquivosDoRegistro(r).includes(body.id))) {
+          return json({ error: "Este arquivo ainda está vinculado a um registro. Preserve-o até a limpeza da lixeira." }, 409);
+        }
         const chaves: string[] = [];
         for (let i = 0; i < (meta.partes || 1); i++) chaves.push(body.id + "/p" + i);
         await apagarArquivo(chaves);

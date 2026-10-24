@@ -141,7 +141,8 @@ async function caminhoAteRaiz(token: string, id: string, raiz: string): Promise<
    seguintes o apresentam. É assinado com o segredo do servidor e vale 10 min,
    então não dá para forjar nem guardar para amanhã. */
 async function assinar(id: string, exp: number): Promise<string> {
-  const segredo = txt(Deno.env.get("TOKEN")) + txt(Deno.env.get("SB_SECRET_KEY"));
+  const segredo = txt(Deno.env.get("DRIVE_TICKET_SECRET") || Deno.env.get("SB_SECRET_KEY") || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"));
+  if (!segredo) throw new Error("Segredo de assinatura do Drive não configurado.");
   const chave = await crypto.subtle.importKey("raw", new TextEncoder().encode(segredo),
     { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const mac = await crypto.subtle.sign("HMAC", chave, new TextEncoder().encode(id + "|" + exp));

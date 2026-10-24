@@ -124,15 +124,14 @@ function linhaItem(it = {}, comPreco = false) {
   const uns = unidades();
   return '<div class="item-linha' + (comPreco ? ' com-preco' : '') + '" data-item' +
     (it.id ? ' data-id="' + esc(it.id) + '"' : '') + '>' +
-    '<div class="campo descricao"><label>Descrição</label>' +
-      '<input type="text" data-i="descricao" value="' + esc(it.descricao || '') + '" placeholder="Material / serviço"></div>' +
-    '<div class="campo"><label>Unid.</label><select data-i="unid">' +
+    campo('Descrição', '<input type="text" data-i="descricao" value="' + esc(it.descricao || '') + '" placeholder="Material / serviço">').replace('class="campo"', 'class="campo descricao"') +
+    campo('Unid.', '<select data-i="unid">' +
       uns.map((u) => '<option' + (u === (it.unid || 'un') ? ' selected' : '') + '>' + esc(u) + '</option>').join('') +
-    '</select></div>' +
-    '<div class="campo"><label>Qtd</label><input type="text" data-i="qtd" inputmode="decimal" value="' + esc(it.qtd != null ? it.qtd : '') + '"></div>' +
+    '</select>') +
+    campo('Qtd', '<input type="text" data-i="qtd" inputmode="decimal" value="' + esc(numeroParaEntrada(it.qtd)) + '">') +
     (comPreco ?
-      '<div class="campo"><label>Preço unit.</label><input type="text" data-i="preco" inputmode="decimal" value="' + esc(it.preco != null ? it.preco : '') + '"></div>' +
-      '<div class="campo"><label>Marca / obs</label><input type="text" data-i="marca" value="' + esc(it.marca || '') + '"></div>'
+      campo('Preço unit.', '<input type="text" data-i="preco" inputmode="decimal" value="' + esc(numeroParaEntrada(it.preco)) + '">') +
+      campo('Marca / obs', '<input type="text" data-i="marca" value="' + esc(it.marca || '') + '">')
       : '') +
     '<button class="lixeira" data-tirar title="Tirar item">✕</button>' +
   '</div>';
@@ -197,10 +196,10 @@ function acharNaAgenda(nome) {
 }
 
 function totaisOC(oc) {
-  const total = (oc.itens || []).reduce((s, i) => s + (Number(i.qtd) || 0) * (Number(i.preco) || 0), 0);
-  const ipi = total * (Number(oc.ipiPerc) || 0) / 100;
-  const icms = total * (Number(oc.icmsPerc) || 0) / 100;
-  const liquido = total + ipi + icms + (Number(oc.frete) || 0) + (Number(oc.seguro) || 0) - Math.abs(Number(oc.desconto) || 0);
+  const total = moedaCentavos((oc.itens || []).reduce((s, i) => s + moedaCentavos((Number(i.qtd) || 0) * (Number(i.preco) || 0)), 0));
+  const ipi = moedaCentavos(total * (Number(oc.ipiPerc) || 0) / 100);
+  const icms = moedaCentavos(total * (Number(oc.icmsPerc) || 0) / 100);
+  const liquido = moedaCentavos(total + ipi + icms + moedaCentavos(oc.frete) + moedaCentavos(oc.seguro) - Math.abs(moedaCentavos(oc.desconto)));
   return { total, ipi, icms, totalLiquido: liquido };
 }
 
@@ -338,7 +337,7 @@ function telaSolicitacao(el, id) {
           '<table><thead><tr><th>#</th><th>Material</th><th class="num">Qtd</th></tr></thead><tbody>' +
           (s.itens || []).map((i, n) => '<tr><td>' + (n + 1) + '</td><td>' + esc(i.descricao) +
             (i.obs ? '<div style="font-size:.8rem;color:var(--texto-fraco)">' + esc(i.obs) + '</div>' : '') + '</td>' +
-            '<td class="num">' + fmt.numero(i.qtd) + ' ' + esc(i.unid || '') + '</td></tr>').join('') +
+            '<td class="num">' + fmt.quantidade(i.qtd) + ' ' + esc(i.unid || '') + '</td></tr>').join('') +
           '</tbody></table>' +
           (s.justificativa ? '<p style="margin-top:12px"><b>Observação:</b> ' + esc(s.justificativa) + '</p>' : '') +
           (s.motivoRecusa ? '<div class="aviso ruim" style="margin-top:12px"><b>Recusada:</b> ' + esc(s.motivoRecusa) + '</div>' : '') +
@@ -684,6 +683,11 @@ function editorOC(el, id, scId) {
       frete: numeroBR(d.frete), seguro: numeroBR(d.seguro), desconto: numeroBR(d.desconto)
     });
     const t = totaisOC(novo);
+    if (novo.frete < 0 || novo.seguro < 0 || novo.ipiPerc < 0 || novo.icmsPerc < 0 || novo.desconto < 0 ||
+        itens.some((i) => i.qtd <= 0 || i.preco < 0) || t.totalLiquido < 0) {
+      toast('Confira os valores: quantidades devem ser positivas; preços, frete, seguro, impostos e desconto não podem ser negativos. O desconto não pode superar o total.', 'ruim');
+      return;
+    }
     novo.total = t.total;
     novo.totalLiquido = t.totalLiquido;
     if (!existente) {
@@ -778,7 +782,7 @@ function puxarDeSolicitacoes(caixa, ligar) {
             '<input type="checkbox" data-sc="' + esc(s.id) + '" data-idx="' + n + '" style="width:auto;min-height:auto">' +
             '<div><div class="nome">' + esc(i.descricao) +
               (jaEm.length ? ' <span class="etiqueta et-comprado">já em ' + esc(jaEm.join(', ')) + '</span>' : '') + '</div>' +
-            '<div class="meta">' + fmt.numero(i.qtd) + ' ' + esc(i.unid || '') + '</div></div></label>';
+            '<div class="meta">' + fmt.quantidade(i.qtd) + ' ' + esc(i.unid || '') + '</div></div></label>';
         }).join('') +
       '</div>').join(''),
     acoes: [
@@ -832,8 +836,8 @@ function telaOC(el, id) {
           '<th class="num">Unit.</th><th class="num">Total</th></tr></thead><tbody>' +
           (o.itens || []).map((i, n) => '<tr><td>' + (n + 1) + '</td><td>' + esc(i.descricao) +
             (i.marca ? '<div style="font-size:.8rem;color:var(--texto-fraco)">' + esc(i.marca) + '</div>' : '') + '</td>' +
-            '<td class="num">' + fmt.numero(i.qtd) + ' ' + esc(i.unid || '') + '</td>' +
-            '<td class="num">' + fmt.brl(i.preco) + '</td>' +
+            '<td class="num">' + fmt.quantidade(i.qtd) + ' ' + esc(i.unid || '') + '</td>' +
+            '<td class="num">' + fmt.unitario(i.preco) + '</td>' +
             '<td class="num">' + fmt.brl((Number(i.qtd) || 0) * (Number(i.preco) || 0)) + '</td></tr>').join('') +
           '</tbody><tfoot>' +
             '<tr><td colspan="4">Soma dos itens</td><td class="num">' + fmt.brl(t.total) + '</td></tr>' +
@@ -871,7 +875,7 @@ function telaOC(el, id) {
             '<div class="arquivo-solto"><span class="ic">' + (r.fotosPendentes ? '📷' : '✅') + '</span>' +
             '<div style="flex:1;min-width:0">' +
               '<div class="nome">' + fmt.dataHora(r.em) + ' · ' + esc(r.por || '—') + '</div>' +
-              '<div class="meta">' + (r.itens || []).map((i) => esc(i.descricao) + ': ' + fmt.numero(i.qtd)).join(' · ') +
+              '<div class="meta">' + (r.itens || []).map((i) => esc(i.descricao) + ': ' + fmt.quantidade(i.qtd)).join(' · ') +
               (r.nf ? ' · NF ' + esc(r.nf) : '') + (r.obs ? ' · ' + esc(r.obs) : '') + '</div>' +
               (r.fotosPendentes
                 ? '<div class="meta" style="color:var(--vermelho)">' + r.fotosPendentes +
@@ -1055,7 +1059,7 @@ function enviarOCWhats(o, link) {
     '*' + ((S.cfg.empresa || {}).nomeCurto || 'Domo Construtora') + '* — Ordem de Compra *' + (o.codigo || '') + '*',
     'Obra: ' + (o.obra || ''),
     '',
-    ...(o.itens || []).map((i, n) => (n + 1) + '. ' + i.descricao + ' — ' + fmt.numero(i.qtd) + ' ' + (i.unid || '')),
+    ...(o.itens || []).map((i, n) => (n + 1) + '. ' + i.descricao + ' — ' + fmt.quantidade(i.qtd) + ' ' + (i.unid || '')),
     '',
     'Valor total: ' + fmt.brl(o.totalLiquido),
     o.prazoEntrega ? 'Prazo de entrega: ' + o.prazoEntrega : '',
@@ -1156,8 +1160,8 @@ TELAS.recebimento = function (el) {
             const ja = jaRecebido(o, i.id);
             const falta = Math.max(0, (Number(i.qtd) || 0) - ja);
             return '<tr><td>' + esc(i.descricao) + '</td>' +
-              '<td class="num"><b>' + fmt.numero(falta) + ' ' + esc(i.unid || '') + '</b>' +
-              (ja ? '<div style="font-size:.78rem;color:var(--texto-fraco)">' + fmt.numero(ja) + ' já recebido</div>' : '') +
+              '<td class="num"><b>' + fmt.quantidade(falta) + ' ' + esc(i.unid || '') + '</b>' +
+              (ja ? '<div style="font-size:.78rem;color:var(--texto-fraco)">' + fmt.quantidade(ja) + ' já recebido</div>' : '') +
               '</td></tr>';
           }).join('') +
         '</tbody></table>' +
@@ -1251,8 +1255,8 @@ function telaReceberOC(o) {
           const ja = jaRecebido(o, i.id);
           const falta = Math.max(0, (Number(i.qtd) || 0) - ja);
           return '<tr><td>' + esc(i.descricao) + '</td>' +
-            '<td class="num">' + fmt.numero(i.qtd) + ' ' + esc(i.unid || '') + '</td>' +
-            '<td class="num">' + fmt.numero(ja) + '</td>' +
+            '<td class="num">' + fmt.quantidade(i.qtd) + ' ' + esc(i.unid || '') + '</td>' +
+            '<td class="num">' + fmt.quantidade(ja) + '</td>' +
             '<td class="num"><input type="text" inputmode="decimal" data-rec="' + esc(i.id) + '" value="' +
             esc(String(Math.round(falta * 1000) / 1000).replace('.', ',')) + '" style="max-width:110px"></td></tr>';
         }).join('') +
@@ -1283,8 +1287,8 @@ function telaReceberOC(o) {
           return r.qtd + jaRecebido(o, r.itemId) > (Number(item.qtd) || 0) + 0.001;
         });
         if (excesso.length && !await confirmar(
-          excesso.map((r) => r.descricao + ': ' + fmt.numero(r.qtd + jaRecebido(o, r.itemId)) + ' de ' +
-            fmt.numero(((o.itens || []).find((x) => x.id === r.itemId) || {}).qtd)).join(' · ') +
+          excesso.map((r) => r.descricao + ': ' + fmt.quantidade(r.qtd + jaRecebido(o, r.itemId)) + ' de ' +
+            fmt.quantidade(((o.itens || []).find((x) => x.id === r.itemId) || {}).qtd)).join(' · ') +
           '. Chegou mais do que foi pedido. Confirma assim mesmo?', { titulo: 'Confere a quantidade', ok: 'Confirmar' })) return;
 
         if (enviandoFotos.tem) { toast('Espere as fotos terminarem de subir', 'ruim'); return; }
@@ -1317,7 +1321,7 @@ function telaReceberOC(o) {
           recebidoEm: (completo && !cancelada) ? new Date().toISOString() : base.recebidoEm
         });
         n.historico = historiar(base, (completo ? 'Recebimento completo' : 'Recebimento parcial') +
-          ' — ' + recebidos.map((r) => r.descricao + ': ' + fmt.numero(r.qtd)).join(', ') + (d.obs ? ' (' + d.obs + ')' : '') +
+          ' — ' + recebidos.map((r) => r.descricao + ': ' + fmt.quantidade(r.qtd)).join(', ') + (d.obs ? ' (' + d.obs + ')' : '') +
           (fotosPendentes.length ? ' · ' + fotosPendentes.length + ' foto(s) ainda não subiram' : ''));
         salvar('oc', n);
         // Quem fecha a solicitação é o SERVIDOR (nucleo.mjs, ao juntar os

@@ -218,19 +218,26 @@ function pintarMenu(telaAtiva) {
   rodape.innerHTML =
     '<div><b>' + esc(S.quem || 'sem nome') + '</b>' +
       (S.perfil && S.perfil !== 'direcao' ? ' · ' + esc((PERFIS_APP[S.perfil] || {}).txt || '') : '') + '</div>' +
-    '<div>' + (!S.online ? 'sem internet — salvando no aparelho'
-      : pend ? pend + ' item(ns) esperando envio'
-      : S.erroSync ? 'erro: ' + esc(S.erroSync)
+    '<div>' + (S.erroFila ? esc(S.erroFila)
+      : S.erroSync ? 'atenção: ' + esc(S.erroSync)
+      : pend ? pend + ' item(ns) guardado(s), aguardando envio ou revisão'
+      : S.erroArquivos ? esc(S.erroArquivos)
+      : S.fotosPendentes ? S.fotosPendentes + ' foto(s) aguardando confirmação'
+      : !S.online ? 'sem internet — confira as pendências antes de sair'
+      : S.erroCache ? esc(S.erroCache)
       : 'tudo sincronizado') + '</div>' +
     '<div class="rodape-botoes">' +
       '<button id="btnSincronizar" title="Buscar novidades e enviar o que está esperando">' +
         (S.sincronizando ? '⏳ sincronizando…' : '🔄 Sincronizar' + (pend ? ' (' + pend + ')' : '')) + '</button>' +
+      (pend || S.fotosPendentes || S.erroArquivos || versoesLocaisPreservadas().length ? '<button id="btnPendenciasLocais">📥 Pendências</button>' : '') +
       '<button id="btnSair" title="Trocar de usuário">🚪 Sair</button>' +
     '</div>' +
     '<div style="margin-top:6px">Domo ' + esc(VERSAO) + '</div>';
 
   const bs = document.getElementById('btnSincronizar');
   if (bs) bs.addEventListener('click', sincronizarAgora);
+  const bp = document.getElementById('btnPendenciasLocais');
+  if (bp) bp.addEventListener('click', mostrarPendenciasLocais);
   const bx = document.getElementById('btnSair');
   if (bx) bx.addEventListener('click', sair);
 }
@@ -238,19 +245,16 @@ function pintarMenu(telaAtiva) {
 // Sincronizar na mão: no canteiro o sinal vai e volta, e esperar o ciclo
 // automático de 90s com o caminhão parado no portão não serve.
 async function sincronizarAgora() {
-  if (!navigator.onLine) { toast('Sem internet agora. O que você fez está guardado no aparelho.', 'ruim'); return; }
+  if (!navigator.onLine) { toast('Sem internet agora. Confira os itens guardados em Pendências.', 'ruim'); return; }
   if (S.sincronizando) return;
   toast('Sincronizando…');
-  const pendAntes = S.fila.length;
   try {
-    await subirFila();
-    await puxar();
-    toast(pendAntes && !S.fila.length ? pendAntes + ' item(ns) enviado(s) · tudo em dia'
-      : S.fila.length ? S.fila.length + ' item(ns) ainda esperando'
-      : 'Tudo em dia', S.fila.length ? '' : 'bom');
-  } catch (e) {
-    toast('Não consegui sincronizar: ' + e.message, 'ruim');
-  }
+    const ok = await puxar();
+    const erro = S.erroFila || S.erroSync || S.erroArquivos || S.erroCache;
+    if (erro) toast(erro, 'ruim');
+    else if (!ok || S.fila.length || S.fotosPendentes) toast('Há itens aguardando envio ou revisão. Confira Pendências.', 'ruim');
+    else toast('Tudo em dia', 'bom');
+  } catch (e) { toast('Não consegui sincronizar: ' + e.message, 'ruim'); }
   render();
 }
 
@@ -258,33 +262,116 @@ async function sincronizarAgora() {
 // texto no celular e, sem isso, continuavam lá depois de a pessoa sair — ou de
 // a direção desligar o acesso dela.
 async function sair() {
-  if (S.fila.length) {
-    const ok = await confirmar(S.fila.length + ' alteração(ões) ainda não subiram para o servidor. ' +
-      'Se você sair agora, esse trabalho se perde. Quer tentar sincronizar antes?',
-      { perigo: true, ok: 'Sair mesmo assim', cancelar: 'Voltar e sincronizar' });
-    if (!ok) { sincronizarAgora(); return; }
-  } else if (!await confirmar('Sair do sistema? Você vai precisar da senha para entrar de novo.', { ok: 'Sair' })) {
-    return;
-  }
+  atualizarFila();
+  const fotos = await fotosAindaNoAparelho();
+  const pend = S.fila.length;
+  const texto = pend || fotos || fotos === null
+    ? 'Há alterações ou fotos ainda guardadas neste aparelho. Elas serão preservadas para este mesmo acesso; outra pessoa não poderá enviá-las. Volte a entrar aqui para concluir a sincronização. Sair agora?'
+    : 'Sair do sistema? Você vai precisar da senha para entrar de novo.';
+  if (!await confirmar(texto, { ok: 'Sair', cancelar: 'Continuar' })) return;
   limparAparelho();
 }
 
-/* Apagar o rastro do sistema NESTE aparelho. Mora numa função só porque já
-   morou em três, e duas delas esqueciam o cache — o comentário do sair() dizia
-   que ele existe para o dado não ficar no celular depois que a direção desliga
-   um acesso, e era justamente o caminho do acesso revogado que não limpava. */
+// A sessão/cache saem; o diário e as fotos pertencentes a ela ficam preservados.
+// Uma nova sessão só lê as próprias pendências, mesmo se o acesso foi revogado.
 function limparAparelho() {
   try {
-    localStorage.removeItem(K.senha);
-    localStorage.removeItem(K.perfil);
-    localStorage.removeItem(K.usuario);
-    localStorage.removeItem(K.cache);
-    localStorage.removeItem(K.fila);
-  } catch { /* modo privado */ }
+    localStorage.removeItem(K.senha); localStorage.removeItem(K.perfil);
+    localStorage.removeItem(K.usuario); localStorage.removeItem(K.cache);
+  } catch { /* não elimina o diário para contornar erro de armazenamento */ }
   S.senhaHash = ''; S.perfil = 'obra'; S.usuarioId = ''; S.acessoProprio = false;
   S.reg = regVazio(); S.fila = []; S.cfg = null;
+  S.erroSync = ''; S.erroFila = ''; S.erroCache = ''; S.erroArquivos = ''; S.fotosPendentes = 0;
   location.hash = '#/painel';
   render();
+}
+
+async function mostrarPendenciasLocais() {
+  atualizarFila();
+  let arquivos = [];
+  try { arquivos = ((await filaArqListar()) || []).filter(f => f.dono === donoFila() || (!f.dono && ehDirecao())); }
+  catch { toast('Não consegui abrir as fotos guardadas; os arquivos foram preservados.', 'ruim'); }
+  const pendencias = S.fila.slice();
+  const preservadas = versoesLocaisPreservadas();
+  const corpo = '<p>Estes itens estão preservados neste aparelho. Revise os dados antes de reenviar; baixar uma cópia não altera o servidor.</p>' +
+    pendencias.map((f, i) => '<div class="cartao" style="margin-bottom:8px"><b>' + esc((COLECOES_DOMO[f.colecao] || {}).nome || f.colecao) + ' · ' + esc(f.registro.codigo || f.registro.nome || f.registro.id) + '</b>' +
+      '<p>' + esc(f.recusado || (pendencias.filter(x => x.colecao === f.colecao && x.registro.id === f.registro.id).length > 1 ? 'Há versões de abas diferentes. Baixe as cópias antes de revisar.' : 'Aguardando envio')) + '</p>' +
+      '<button class="btn pequeno" data-baixarpend="' + i + '">Baixar esta versão</button>' +
+      '<button class="btn pequeno" data-reenviarpend="' + i + '">Reenviar esta versão</button>' +
+      '<a class="btn pequeno" href="#/' + ({ sc:'solicitacoes', oc:'compras', os:'servicos', crono:'cronogramas', forn:'fornecedores', prest:'fornecedores', comp:'compromissos', pessoa:'pessoas', permuta:'permutas', doc:'documentos', proj:'projetos' }[f.colecao] || 'painel') + '/' + encodeURIComponent(f.registro.id) + '" data-revisarpend>Revisar no cadastro</a></div>').join('') +
+    (preservadas.length ? '<details><summary>' + preservadas.length + ' versão(ões) anteriores preservadas</summary>' + preservadas.map((f, i) => '<p>' + (f.origem === 'servidor' ? 'Servidor antes do reenvio · ' : 'Versão local · ') + esc(f.registro.codigo || f.registro.nome || f.registro.id) + ' <button class="btn pequeno" data-baixarversao="' + i + '">Baixar versão anterior</button></p>').join('') + '</details>' : '') +
+    arquivos.map((f, i) => '<div class="cartao" style="margin-bottom:8px"><b>' + esc(f.nome || 'Foto') + '</b><p>' + esc(!f.dono ? 'Foto antiga sem dono identificado; baixe e anexe ao recebimento correto.' : 'Aguardando confirmação do vínculo com o recebimento.') + '</p><button class="btn pequeno" data-baixarfoto="' + i + '">Baixar foto</button></div>').join('') +
+    (!pendencias.length && !arquivos.length ? '<p>Nenhuma pendência neste acesso.</p>' : '');
+  abrirModal({ titulo: 'Pendências preservadas neste aparelho', corpo, acoes: [{ texto: 'Fechar', aoClicar: () => fecharModal() }] });
+  document.querySelectorAll('[data-baixarpend]').forEach(b => b.addEventListener('click', () => {
+    const f = pendencias[Number(b.dataset.baixarpend)];
+    salvarNoAparelho(new Blob([JSON.stringify({ colecao: f.colecao, registro: limparParaEnvio(f.registro), motivo: f.recusado || '' }, null, 2)], { type: 'application/json' }), 'domo-pendencia-' + f.op + '.json');
+  }));
+  document.querySelectorAll('[data-reenviarpend]').forEach(b => b.addEventListener('click', async () => {
+    const f = pendencias[Number(b.dataset.reenviarpend)];
+    if (!navigator.onLine) { toast('Conecte para conferir a versão atual antes de reenviar.', 'ruim'); return; }
+    b.disabled = true;
+    const dono = donoFila();
+    try {
+      const resposta = await api('snapshot');
+      if (donoFila() !== dono) return;
+      const atual = (resposta.registros || []).find(x => x._col === f.colecao && x.id === f.registro.id) || null;
+      if (!atual && f.registro._baseExistente !== false) { toast('O registro não está disponível neste acesso. Baixe sua versão para recuperar os dados com a direção.', 'ruim'); return; }
+      const rotulos = {
+        nota: 'Observações', observacao: 'Observações', observacoes: 'Observações', justificativa: 'Justificativa',
+        nf: 'Nota fiscal', notaFiscal: 'Nota fiscal', numeroNF: 'Número da nota fiscal', dataNF: 'Data da nota fiscal',
+        data: 'Data', em: 'Data', dataEntrega: 'Data de entrega', entregaPrevista: 'Entrega prevista',
+        necessidadeEm: 'Precisa até', prazoEntrega: 'Prazo de entrega', inicio: 'Início', fim: 'Fim',
+        itens: 'Itens', recebimentos: 'Recebimentos', qtd: 'Quantidade', quantidade: 'Quantidade',
+        preco: 'Preço unitário', valor: 'Valor', total: 'Total', totalLiquido: 'Total líquido',
+        descricao: 'Descrição', unid: 'Unidade', nome: 'Nome', fornecedor: 'Fornecedor',
+        solicitante: 'Solicitante', situacao: 'Situação', obra: 'Obra', servico: 'Serviço',
+        condicaoPagamento: 'Condição de pagamento', formaPagamento: 'Forma de pagamento',
+        dadosBancarios: 'Dados bancários', localEntrega: 'Local de entrega', endereco: 'Endereço',
+        telefone: 'Telefone', contato: 'Contato', anexos: 'Anexos', fotos: 'Fotos',
+        adiantamento: 'Adiantamento', adiantamentos: 'Adiantamentos', medicoes: 'Medições'
+      };
+      const ignorados = new Set(['id', 'criadoEm', 'criadoPor', 'atualizadoEm', 'atualizadoPor', 'historico']);
+      const rotulo = k => rotulos[k] || k.replace(/([a-zà-ú])([A-ZÀ-Ú])/g, '$1 $2').replace(/^./, c => c.toUpperCase());
+      const limparResumo = valor => Array.isArray(valor) ? valor.map(limparResumo)
+        : valor && typeof valor === 'object' ? Object.fromEntries(Object.keys(valor).sort().filter(k => !k.startsWith('_') && !ignorados.has(k)).map(k => [k, limparResumo(valor[k])])) : valor;
+      const formatar = valor => {
+        if (valor === undefined || valor === null || valor === '') return 'Não informado';
+        if (Array.isArray(valor)) return valor.length ? valor.map((v, i) => (i + 1) + '. ' + formatar(v)).join('\n\n') : 'Nenhum';
+        if (typeof valor === 'object') return Object.entries(valor).map(([k, v]) => rotulo(k) + ': ' + formatar(v)).join('\n');
+        if (typeof valor === 'boolean') return valor ? 'Sim' : 'Não';
+        if (typeof valor === 'number') return valor.toLocaleString('pt-BR', { maximumFractionDigits: 10 });
+        if (/^\d{4}-\d{2}-\d{2}$/.test(valor)) return valor.split('-').reverse().join('/');
+        return String(valor);
+      };
+      const remoto = limparResumo(atual || {}), local = limparResumo(f.registro);
+      const diferentes = [...new Set([...Object.keys(remoto), ...Object.keys(local)])]
+        .filter(k => JSON.stringify(remoto[k]) !== JSON.stringify(local[k]));
+      const celula = 'style="vertical-align:top;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word"';
+      const resumo = diferentes.length
+        ? '<h3>O que está diferente</h3><table style="width:100%;min-width:0;table-layout:fixed"><thead><tr><th style="width:24%">Campo</th><th>Atual no servidor</th><th>Sua versão</th></tr></thead><tbody>' +
+          diferentes.map(k => '<tr><th ' + celula + ' scope="row">' + esc(rotulo(k)) + '</th><td ' + celula + '>' + esc(formatar(remoto[k])) + '</td><td ' + celula + '>' + esc(formatar(local[k])) + '</td></tr>').join('') + '</tbody></table>'
+        : '<p class="aviso info">Os campos de conteúdo coincidem. Confira os detalhes completos abaixo antes de reenviar.</p>';
+      const mostrar = r => r ? '<details><summary>Conferir todos os campos desta versão</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:250px;overflow:auto">' + esc(JSON.stringify(limparParaEnvio(r), (k, v) => k.startsWith('_') ? undefined : v, 2)) + '</pre></details>' : '<p>Registro novo, ainda não encontrado no servidor.</p>';
+      abrirModal({ titulo: 'Conferir antes de reenviar', corpo:
+        '<p>Compare as versões. Ao confirmar, a sua versão voltará à fila usando esta conferência como referência. Se o servidor mudar novamente, o reenvio será recusado para nova revisão.</p>' +
+        resumo + '<h3>Versão atual no servidor</h3>' + mostrar(atual) + '<h3>Sua versão preservada</h3>' + mostrar(f.registro),
+        acoes: [{ texto: 'Voltar e conferir', aoClicar: fundo => fecharEste(fundo) },
+          { texto: 'Conferi, reenviar minha versão', classe: 'primario', aoClicar: fundo => {
+            if (donoFila() !== dono) { toast('A sessão mudou. Abra as pendências novamente.', 'ruim'); return; }
+            try { resolverPendenciaLocal(f.op, atual); fecharEste(fundo); fecharModal(); render(); toast('Versão guardada para reenvio. As anteriores continuam disponíveis para baixar.'); }
+            catch (e) { toast(e.message, 'ruim'); }
+          } }]
+      });
+    } catch (e) { toast('Não consegui conferir: ' + e.message, 'ruim'); }
+    finally { b.disabled = false; }
+  }));
+  document.querySelectorAll('[data-baixarversao]').forEach(b => b.addEventListener('click', () => {
+    const f = preservadas[Number(b.dataset.baixarversao)];
+    salvarNoAparelho(new Blob([JSON.stringify({ colecao: f.colecao, registro: limparParaEnvio(f.registro) }, null, 2)], { type: 'application/json' }), 'domo-versao-' + f.op + '.json');
+  }));
+  document.querySelectorAll('[data-baixarfoto]').forEach(b => b.addEventListener('click', () => { const f = arquivos[Number(b.dataset.baixarfoto)]; salvarNoAparelho(f.blob, f.nome || 'foto.jpg'); }));
+  document.querySelectorAll('[data-revisarpend]').forEach(b => b.addEventListener('click', () => fecharModal()));
 }
 
 function cabecalho(titulo, sub, acoesHtml) {
@@ -608,13 +695,13 @@ TELAS.painel = function (el) {
 
     // ── documentos ──
     (vencendo.length ? '<div class="cartao"><h3>🗂️ Documentos que vencem em breve</h3>' +
-      '<table><tbody>' + vencendo.map((d) => {
+      '<div class="tabela-rolagem" role="region" aria-label="Documentos próximos do vencimento" tabindex="0"><table><tbody>' + vencendo.map((d) => {
         const dias = diasAte(d.validadeEm);
         return '<tr class="clicavel" data-ir="documentos"><td><b>' + esc(d.tipo) + '</b> ' + esc(d.nome || '') + '</td>' +
           '<td class="num">' + fmt.data(d.validadeEm) + '</td>' +
           '<td class="num"><span class="etiqueta ' + (dias < 0 ? 'et-vencido' : 'et-vencendo') + '">' +
           (dias < 0 ? 'vencido' : 'faltam ' + dias + ' dia(s)') + '</span></td></tr>';
-      }).join('') + '</tbody></table></div>' : '');
+      }).join('') + '</tbody></table></div></div>' : '');
 
   el.querySelectorAll('[data-ir]').forEach((n) => n.addEventListener('click', () => irPara(n.dataset.ir)));
   document.querySelectorAll('[data-acao="linkObra"]').forEach((b) => b.addEventListener('click', mostrarLinkObra));
@@ -1044,12 +1131,12 @@ TELAS.config = function (el) {
     '<div class="cartao">' +
       '<h3>🏗️ Obras / empreendimentos</h3>' +
       '<p class="legenda">Toda solicitação, compra e projeto pertence a uma obra.</p>' +
-      '<table><thead><tr><th>Obra</th><th>Endereço</th><th></th></tr></thead><tbody>' +
+      '<div class="tabela-rolagem" role="region" aria-label="Obras e endereços" tabindex="0"><table><thead><tr><th>Obra</th><th>Endereço</th><th></th></tr></thead><tbody>' +
       (cfg.obras || []).map((o, i) =>
         '<tr><td><b>' + esc(o.nome) + '</b>' + (o.ativa === false ? ' <span class="etiqueta">inativa</span>' : '') + '</td>' +
         '<td>' + esc(o.endereco || '—') + '</td>' +
         '<td class="num"><button class="btn pequeno" data-obra="' + i + '">Editar</button></td></tr>').join('') +
-      '</tbody></table>' +
+      '</tbody></table></div>' +
       '<div class="barra-acoes" style="margin-top:10px"><button class="btn" id="novaObra">+ Nova obra</button></div>' +
     '</div>' +
 
@@ -1077,10 +1164,10 @@ TELAS.config = function (el) {
     '<div class="cartao">' +
       '<h3>🔗 Links públicos</h3>' +
       '<p class="legenda">Não pedem senha. Podem ser mandados para qualquer pessoa.</p>' +
-      '<div class="arquivo-solto"><span class="ic">📋</span><div><div class="nome">Pedir material (obra)</div>' +
+      '<div class="arquivo-solto link-publico"><span class="ic">📋</span><div class="link-conteudo"><div class="nome">Pedir material (obra)</div>' +
         '<div class="meta">' + esc(location.origin + location.pathname) + '#/solicitar</div></div>' +
         '<div class="acoes"><button class="btn pequeno" data-copiar="#/solicitar">Copiar</button></div></div>' +
-      '<div class="arquivo-solto"><span class="ic">🔎</span><div><div class="nome">Andamento das compras (só o nome)</div>' +
+      '<div class="arquivo-solto link-publico"><span class="ic">🔎</span><div class="link-conteudo"><div class="nome">Andamento das compras (só o nome)</div>' +
         '<div class="meta">' + esc(location.origin + location.pathname) + '#/acompanhar</div></div>' +
         '<div class="acoes"><button class="btn pequeno" data-copiar="#/acompanhar">Copiar</button></div></div>' +
     '</div>' +
@@ -1150,10 +1237,10 @@ TELAS.config = function (el) {
       abrirModal({
         titulo: 'Histórico de acessos e alterações',
         largo: true,
-        corpo: '<table><thead><tr><th>Quando</th><th>Quem</th><th>O quê</th></tr></thead><tbody>' +
+        corpo: '<div class="tabela-rolagem" role="region" aria-label="Histórico de alterações" tabindex="0"><table><thead><tr><th>Quando</th><th>Quem</th><th>O quê</th></tr></thead><tbody>' +
           (r.linhas || []).map((l) => '<tr><td>' + fmt.dataHora(l.em) + '</td><td>' + esc(l.por || '—') + '</td>' +
             '<td>' + esc(l.acao || '') + ' ' + esc(l.codigo || l.obra || '') + '</td></tr>').join('') +
-          '</tbody></table>',
+          '</tbody></table></div>',
         acoes: [{ texto: 'Fechar', aoClicar: () => fecharModal() }]
       });
     } catch (e) { toast(e.message, 'ruim'); }
@@ -1261,11 +1348,11 @@ function pintarLixeira() {
     for (const r of (S.reg[c] || [])) if (r.apagadoEm) itens.push({ c, r });
   }
   if (!itens.length) { alvo.innerHTML = '<p class="legenda">Vazia.</p>'; return; }
-  alvo.innerHTML = '<table><tbody>' + itens.map(({ c, r }) =>
+  alvo.innerHTML = '<div class="tabela-rolagem" role="region" aria-label="Itens na lixeira" tabindex="0"><table><tbody>' + itens.map(({ c, r }) =>
     '<tr><td>' + esc((cols[c] || {}).nome || c) + '</td><td><b>' + esc(r.codigo || r.nome || r.id) + '</b></td>' +
     '<td>apagado ' + fmt.quando(r.apagadoEm) + ' por ' + esc(r.apagadoPor || '—') + '</td>' +
     '<td class="num"><button class="btn pequeno" data-restaurar="' + esc(c) + '|' + esc(r.id) + '">Restaurar</button></td></tr>'
-  ).join('') + '</tbody></table>';
+  ).join('') + '</tbody></table></div>';
   alvo.querySelectorAll('[data-restaurar]').forEach((b) => b.addEventListener('click', async () => {
     const [c, id] = b.dataset.restaurar.split('|');
     try {

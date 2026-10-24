@@ -22,6 +22,39 @@ const esc = (s) => String(s == null ? '' : s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
+// Uma regra para os valores monetários: centavos, metade para longe de zero.
+// Deslocar a casa decimal em texto evita que 1,005 vire 1,00 por ruído binário.
+function moedaCentavos(valor) {
+  const n = Number(valor);
+  if (!Number.isFinite(n)) return 0;
+  const [base, exp = '0'] = Math.abs(n).toString().split('e');
+  return Math.sign(n) * Number(Math.round(Number(base + 'e' + (Number(exp) + 2))) + 'e-2');
+}
+
+// Números persistidos nunca voltam ao editor como "0.125": o parser brasileiro
+// interpreta ponto seguido de três casas como milhar. Não arredondar a entrada.
+function numeroParaEntrada(valor) {
+  if (valor == null) return '';
+  if (typeof valor !== 'number') return String(valor);
+  const [base, expoente] = String(Math.abs(valor)).split('e');
+  if (expoente == null) return String(valor).replace('.', ',');
+  const digitos = base.replace('.', '');
+  const casas = (base.split('.')[0].length) + Number(expoente);
+  const decimal = casas <= 0 ? '0,' + '0'.repeat(-casas) + digitos :
+    casas >= digitos.length ? digitos + '0'.repeat(casas - digitos.length) :
+      digitos.slice(0, casas) + ',' + digitos.slice(casas);
+  return (valor < 0 ? '-' : '') + decimal;
+}
+
+// Quantidades e preços unitários podem ter frações de centavo. Exibir as
+// casas registradas; só totais financeiros usam o arredondamento em centavos.
+function numeroComPrecisao(valor, minimo = 0) {
+  const n = Number(valor);
+  const [inteiro, decimal = ''] = numeroParaEntrada(Number.isFinite(n) ? n : 0).split(',');
+  const parte = decimal.padEnd(minimo, '0');
+  return inteiro.replace(/\B(?=(\d{3})+(?!\d))/g, '.') + (parte ? ',' + parte : '');
+}
+
 const fmt = {
   brl(n) {
     const v = Number(n) || 0;
@@ -30,6 +63,8 @@ const fmt = {
   numero(n, casas = 2) {
     return (Number(n) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: casas });
   },
+  quantidade(n) { return numeroComPrecisao(n); },
+  unitario(n) { return 'R$\u00a0' + numeroComPrecisao(n, 2); },
   data(iso) {
     if (!iso) return '—';
     const s = String(iso);
@@ -206,7 +241,16 @@ function abrirModal({ titulo, corpo, acoes = [], largo = false, aoFechar = null,
     b.className = 'btn ' + (a.classe || '');
     b.textContent = a.texto;
     b.dataset.i = i;
-    b.addEventListener('click', () => a.aoClicar && a.aoClicar(fundo));
+    b.addEventListener('click', async () => {
+      try { if (a.aoClicar) await a.aoClicar(fundo); }
+      catch (e) {
+        // O store já explicou a falha de armazenamento. O formulário fica
+        // aberto e preenchido; não transformar a recusa esperada em sucesso.
+        if (e && e.code === 'DOMO_STORAGE_FULL') return;
+        console.error('Falha na ação do formulário', e);
+        toast((e && e.message) || 'Não foi possível concluir. Confira os dados e tente novamente.', 'ruim');
+      }
+    });
     rodape.appendChild(b);
   });
   fundo.addEventListener('click', (e) => {
@@ -331,8 +375,15 @@ function perguntarData(rotulo, opts = {}) {
 }
 
 /* ── Peças de formulário ───────────────────────────────────────────────────── */
+let _campoSeq = 0;
 function campo(rot, html, dica) {
-  return '<div class="campo"><label>' + esc(rot) + '</label>' + html +
+  let id = '';
+  const controle = String(html).replace(/<(input|textarea|select)\b([^>]*)>/i, (tag, tipo, attrs) => {
+    const existente = attrs.match(/(?:^|\s)id="([^"]+)"/i);
+    id = existente ? existente[1] : 'campo-domo-' + (++_campoSeq);
+    return existente ? tag : '<' + tipo + ' id="' + id + '"' + attrs + '>';
+  });
+  return '<div class="campo"><label' + (id ? ' for="' + id + '"' : '') + '>' + esc(rot) + '</label>' + controle +
     (dica ? '<div class="dica">' + esc(dica) + '</div>' : '') + '</div>';
 }
 
@@ -340,7 +391,7 @@ function entrada(nome, valor, opts = {}) {
   const attrs = [
     'type="' + (opts.tipo || 'text') + '"',
     'data-campo="' + esc(nome) + '"',
-    'value="' + esc(valor == null ? '' : valor) + '"',
+    'value="' + esc(opts.inputmode === 'decimal' && opts.tipo !== 'number' ? numeroParaEntrada(valor) : valor == null ? '' : valor) + '"',
     opts.placeholder ? 'placeholder="' + esc(opts.placeholder) + '"' : '',
     opts.inputmode ? 'inputmode="' + opts.inputmode + '"' : '',
     opts.passo ? 'step="' + opts.passo + '"' : '',

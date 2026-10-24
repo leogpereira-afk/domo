@@ -33,18 +33,42 @@ export const tokenCurto = () => {
 /* ── registros ─────────────────────────────────────────────────────────────── */
 export async function lerUm(colecao: string, id: string): Promise<any | null> {
   if (!id) return null;
-  const { data } = await db.from("domo_registros").select("registro")
+  const { data, error } = await db.from("domo_registros").select("registro")
     .eq("colecao", colecao).eq("id", id).maybeSingle();
+  if (error) throw new Error("ler " + colecao + ": " + error.message);
   return data ? data.registro : null;
 }
 
 export async function gravarUm(colecao: string, id: string, registro: any): Promise<void> {
+  registro._revisao = crypto.randomUUID();
   const { error } = await db.from("domo_registros").upsert({
     colecao, id, registro,
     atualizado_em: registro.atualizadoEm || agora(),
     apagado: !!registro.apagadoEm,
   });
   if (error) throw new Error("gravar " + colecao + ": " + error.message);
+}
+
+// Compare-and-swap no Postgres: nunca transforma um conflito em overwrite.
+// A migração 0004 precisa existir antes desta versão das Functions.
+export async function gravarSeInalterado(colecao: string, id: string, esperado: any, registro: any): Promise<boolean> {
+  registro._revisao = crypto.randomUUID();
+  registro.atualizadoEm = new Date(Math.max(Date.now(), (Date.parse(esperado?.atualizadoEm || '') || 0) + 1)).toISOString();
+  const { data, error } = await db.rpc("domo_gravar_se_inalterado", {
+    p_colecao: colecao, p_id: id, p_esperado: esperado, p_registro: registro,
+  });
+  if (error) throw new Error("Não foi possível salvar com segurança: " + error.message);
+  return data === true;
+}
+
+export async function atualizarRegistro(colecao: string, id: string, preparar: (atual: any) => any): Promise<any> {
+  for (let tentativa = 0; tentativa < 8; tentativa++) {
+    const atual = await lerUm(colecao, id);
+    const novo = await preparar(atual == null ? null : structuredClone(atual));
+    if (novo === null) return null;
+    if (await gravarSeInalterado(colecao, id, atual, novo)) return novo;
+  }
+  throw new Error("O registro mudou em outro aparelho. Atualize e tente novamente; nenhuma alteração foi descartada.");
 }
 
 // Todos os registros (com a lixeira — o cliente é quem esconde o apagado).
@@ -74,7 +98,8 @@ export async function lerTudo(colecoes: string[] | null, todas: string[]): Promi
 }
 
 export async function apagarDeVez(colecao: string, id: string): Promise<void> {
-  await db.from("domo_registros").delete().eq("colecao", colecao).eq("id", id);
+  const { error } = await db.from("domo_registros").delete().eq("colecao", colecao).eq("id", id);
+  if (error) throw new Error("apagar " + colecao + ": " + error.message);
 }
 
 // Varre registros de UMA coleção, TODOS de uma vez (paginado). Coleta o
@@ -182,7 +207,7 @@ export const BUCKET = "domo-arquivos";
 
 export async function subirParte(chave: string, corpo: Uint8Array): Promise<void> {
   const { error } = await db.storage.from(BUCKET).upload(chave, corpo, {
-    contentType: "application/octet-stream", upsert: true,
+    contentType: "application/octet-stream", upsert: false,
   });
   if (error) throw new Error("subir " + chave + ": " + error.message);
 }
@@ -194,7 +219,9 @@ export async function baixarParte(chave: string): Promise<Uint8Array | null> {
 }
 
 export async function apagarArquivo(chaves: string[]): Promise<void> {
-  if (chaves.length) await db.storage.from(BUCKET).remove(chaves);
+  if (!chaves.length) return;
+  const { error } = await db.storage.from(BUCKET).remove(chaves);
+  if (error) throw new Error("apagar arquivo: " + error.message);
 }
 
 export async function listarArquivos(prefixo = ""): Promise<{ name: string; size: number }[]> {

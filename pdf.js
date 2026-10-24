@@ -99,6 +99,25 @@ function tituloSecao(doc, y, texto) {
   return y + 6;
 }
 
+// Observações e cláusulas podem ocupar várias páginas. Escrever uma matriz de
+// linhas inteira não faz o jsPDF paginar: ele simplesmente corta o excedente.
+function textoPaginadoPDF(doc, y, texto, titulo, aoQuebrar, tamanho = 8) {
+  const altura = tamanho * 0.352778 * 1.35;
+  const preparar = (continua) => {
+    if (titulo) y = tituloSecao(doc, y, titulo + (continua ? ' (continuação)' : ''));
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(tamanho); doc.setTextColor(20, 20, 20);
+  };
+  if (y + altura + (titulo ? 6 : 0) > 268) { doc.addPage(); y = aoQuebrar ? aoQuebrar(doc) : 22; }
+  preparar(false);
+  const linhas = doc.splitTextToSize(String(texto), UTIL - 4);
+  for (const linha of linhas) {
+    if (y > 268) { doc.addPage(); y = aoQuebrar ? aoQuebrar(doc) : 22; preparar(true); }
+    doc.text(linha, M + 2, y);
+    y += altura;
+  }
+  return y + 4;
+}
+
 // Tabela com quebra de página automática.
 function tabela(doc, y, colunas, linhas, aoQuebrar) {
   const desenharCabecalho = (yy) => {
@@ -223,7 +242,7 @@ async function pdfOC(o, cfg) {
   ];
   const linhas = (o.itens || []).map((i, n) => [
     n + 1, i.descricao, i.marca || '', i.unid || '',
-    fmt.numero(i.qtd), fmt.brl(i.preco), fmt.brl((Number(i.qtd) || 0) * (Number(i.preco) || 0))
+    fmt.quantidade(i.qtd), fmt.unitario(i.preco), fmt.brl((Number(i.qtd) || 0) * (Number(i.preco) || 0))
   ]);
   y = tabela(doc, y, colunas, linhas, (d) => cabecalhoPDF(d, logo, cfg, 'ORDEM DE COMPRA', o.codigo || ''));
 
@@ -257,27 +276,14 @@ async function pdfOC(o, cfg) {
   y += 12;
 
   if (o.observacoes) {
-    y = tituloSecao(doc, y, 'Observações / condições gerais');
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    const linhasObs = doc.splitTextToSize(String(o.observacoes), UTIL - 4);
-    doc.text(linhasObs, M + 2, y);
-    y += linhasObs.length * 3.8 + 4;
+    y = textoPaginadoPDF(doc, y, o.observacoes, 'Observações / condições gerais',
+      (d) => cabecalhoPDF(d, logo, cfg, 'ORDEM DE COMPRA', o.codigo || ''));
   }
 
   const clausulas = (cfg && cfg.clausulasOC) || [];
   if (clausulas.length) {
-    if (y > 225) { doc.addPage(); y = cabecalhoPDF(doc, logo, cfg, 'ORDEM DE COMPRA', o.codigo || ''); }
-    y = tituloSecao(doc, y, 'Cláusulas e condições contratuais');
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.2);
-    clausulas.forEach((c, i) => {
-      const linhasC = doc.splitTextToSize((i + 1) + '. ' + c, UTIL - 4);
-      if (y + linhasC.length * 3.2 > 262) { doc.addPage(); y = 22; }
-      doc.text(linhasC, M + 2, y);
-      y += linhasC.length * 3.2 + 1.4;
-    });
-    y += 4;
+    y = textoPaginadoPDF(doc, y, clausulas.map((c, i) => (i + 1) + '. ' + c).join('\n\n'),
+      'Cláusulas e condições contratuais', (d) => cabecalhoPDF(d, logo, cfg, 'ORDEM DE COMPRA', o.codigo || ''), 7.2);
   }
 
   const ass = (cfg && cfg.assinaturas) || {};
@@ -400,15 +406,8 @@ async function pdfMedicao(os, m, cfg) {
   y += 12;
 
   if (m.obs) {
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    const linhasObs = doc.splitTextToSize(String(m.obs), UTIL - 4);
-    if (y + linhasObs.length * 3.8 + 12 > 266) { doc.addPage(); y = cabecalhoPDF(doc, logo, cfg, 'BOLETIM DE ' + nMed, os.codigo || ''); }
-    y = tituloSecao(doc, y, 'Observações');
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.text(linhasObs, M + 2, y);
-    y += linhasObs.length * 3.8 + 4;
+    y = textoPaginadoPDF(doc, y, m.obs, 'Observações',
+      (d) => cabecalhoPDF(d, logo, cfg, 'BOLETIM DE ' + nMed, os.codigo || ''));
   }
 
   doc.setFont('helvetica', 'normal');
@@ -461,7 +460,7 @@ async function pdfOS(o, cfg) {
     { titulo: 'TOTAL', largura: 26, alinha: 'right' }
   ];
   const linhas = (o.itens || []).map((i, n) => [
-    n + 1, i.descricao, i.unid || '', fmt.numero(i.qtd), fmt.brl(i.preco),
+    n + 1, i.descricao, i.unid || '', fmt.quantidade(i.qtd), fmt.unitario(i.preco),
     fmt.brl((Number(i.qtd) || 0) * (Number(i.preco) || 0))
   ]);
   y = tabela(doc, y, colunas, linhas, (d) => cabecalhoPDF(d, logo, cfg, 'ORDEM DE SERVIÇO', o.codigo || ''));
@@ -478,12 +477,8 @@ async function pdfOS(o, cfg) {
   y += 12;
 
   if (o.observacoes) {
-    y = tituloSecao(doc, y, 'Observações / condições');
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    const obs = doc.splitTextToSize(String(o.observacoes), UTIL - 4);
-    doc.text(obs, M + 2, y);
-    y += obs.length * 3.8 + 6;
+    y = textoPaginadoPDF(doc, y, o.observacoes, 'Observações / condições',
+      (d) => cabecalhoPDF(d, logo, cfg, 'ORDEM DE SERVIÇO', o.codigo || ''));
   }
 
   const ass = (cfg && cfg.assinaturas) || {};

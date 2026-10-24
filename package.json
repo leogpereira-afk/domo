@@ -2,5 +2,14 @@
   "name": "domo-gestao",
   "version": "1.0.0",
   "description": "Sistema de gestão da Domo Construtora — compras, obra, projetos e documentos (GitHub Pages + Supabase Edge Functions, offline-first)",
-  "private": true
+  "private": true,
+  "scripts": {
+    "test": "node scripts/test.mjs",
+    "preview": "node scripts/preview-server.mjs"
+  },
+  "engines": { "node": ">=24" },
+  "packageManager": "pnpm@11.25.0",
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.11"
+  }
 }

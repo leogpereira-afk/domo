@@ -117,6 +117,7 @@ export function motivoRecusa(quem: Quem | null, colecao: string, registro: any, 
     return "";
   }
 
+  if (!atual && colecao === "oc") return "quem é da obra não emite ordem de compra";
   if (!atual) return "";
 
   const permitidos = CAMPOS_OBRA[colecao] || [];
@@ -219,12 +220,14 @@ function mascararDinheiroNoTexto(lista: any): any {
 
 export function filtrarLeitura(quem: Quem | null, registros: any[]): any[] {
   const p = PERFIS[perfilDe(quem)];
+  registros = registros.filter((r) => podeLerRegistro(quem, r));
   if (!p || p.tudo || !p.le) return registros;
   return registros
     .filter((r) => p.le!.includes(r._col))
     .map((r) => {
       if (!(p.semPreco || []).includes(r._col)) return r;
       const limpo = semValores(r);
+      delete limpo.tokenPublico;
       delete limpo.medicoes;
       delete limpo.aditivos;
       // 'cot' está em semPreco mas não em `le`, então esta limpeza nunca roda
@@ -242,4 +245,14 @@ export function filtrarLeitura(quem: Quem | null, registros: any[]): any[] {
       limpo.diario = mascararDinheiroNoTexto(limpo.diario);
       return limpo;
     });
+}
+
+// A mesma regra serve para snapshot, confirmação de gravação e anexos.
+export function podeLerRegistro(quem: Quem | null, registro: any): boolean {
+  if (!quem || !registro) return false;
+  const perfil = perfilDe(quem);
+  if (perfil === "direcao") return true;
+  if (COLECOES_SO_DIRECAO.has(registro._col)) return false;
+  if (registro._col === "comp") return registro.dono === quem.id;
+  return !PERFIS[perfil].le || PERFIS[perfil].le!.includes(registro._col);
 }

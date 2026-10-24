@@ -31,7 +31,17 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '11.25.0'
+
+      - name: Instalar ferramentas de teste
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Testar preservação, permissões, cálculos e regras do banco
+        run: pnpm test
 
       # As vagas foram para o Diamond (5c4626e). Este passo conferia arquivos que
       # não existem mais e derrubava a publicação inteira — o site ficou parado

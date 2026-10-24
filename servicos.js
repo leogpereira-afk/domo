@@ -14,7 +14,7 @@
 
 const RETENCAO_PADRAO = 5;   // % de garantia retido em cada medição
 
-const valorItem = (i) => (Number(i.qtd) || 0) * (Number(i.preco) || 0);
+const valorItem = (i) => moedaCentavos((Number(i.qtd) || 0) * (Number(i.preco) || 0));
 
 // Medições que valem (cancelada não conta), da primeira para a última.
 // Desempate pela data: dois aparelhos sem sinal podem lançar a "medição 02" ao
@@ -37,10 +37,10 @@ function percMedido(os, itemId) {
 
 function totaisOS(os) {
   const itens = os.itens || [];
-  const contrato = itens.reduce((s, i) => s + valorItem(i), 0);
+  const contrato = moedaCentavos(itens.reduce((s, i) => s + valorItem(i), 0));
   const ms = medicoesValidas(os);
 
-  const medido = itens.reduce((s, i) => s + valorItem(i) * percMedido(os, i.id) / 100, 0);
+  const medido = moedaCentavos(itens.reduce((s, i) => s + moedaCentavos(valorItem(i) * percMedido(os, i.id) / 100), 0));
   const pagas = ms.filter((m) => m.situacao === 'paga');
   const bruto = ms.reduce((s, m) => s + (Number(m.bruto) || 0), 0);
 
@@ -61,24 +61,29 @@ function totaisOS(os) {
   // contratos que já existiam não podem perder o que foi adiantado.
   const lancados = (os.adiantamentos || []).filter((a) => a && !a.apagadoEm);
   const somaLancados = lancados.reduce((s, a) => s + (Number(a.valor) || 0), 0);
-  const adiantamento = somaLancados || Number(os.adiantamento) || 0;
+  // Só uma referência explícita identifica um inicial já migrado. Dois
+  // pagamentos do mesmo valor continuam sendo dois pagamentos distintos.
+  const inicialMigrado = (os.adiantamentos || []).some((a) => a &&
+    (a.origem === 'inicial' || (os.adiantamentoInicialId && a.id === os.adiantamentoInicialId)));
+  const adiantamento = moedaCentavos(somaLancados + (inicialMigrado ? 0 : Number(os.adiantamento) || 0));
 
   return {
     contrato,
     medido,
-    saldo: contrato - medido,
+    saldo: moedaCentavos(contrato - medido),
     percFisico: contrato ? (medido / contrato) * 100 : 0,
     bruto, retido, retencaoPrevista, aPagar, naoPagas,
     lancamentosAdiantamento: lancados,
+    adiantamentoInicial: inicialMigrado ? 0 : Number(os.adiantamento) || 0,
     // "Já pago" = o dinheiro que REALMENTE saiu do caixa: medições pagas mais
     // os adiantamentos. Antes o adiantamento não entrava e a tela dizia
     // "Já pago R$ 0,00" com R$ 20.000 na mão do empreiteiro.
-    pago: pago + adiantamento,
+    pago: moedaCentavos(pago + adiantamento),
     pagoMedicoes: pago,
     retencaoLiberada: Number((os.retencaoLiberada || {}).valor) || 0,
     adiantamento,
-    adiantamentoSaldo: Math.max(0, adiantamento - amortizado),
-    adiantamentoExcesso: Math.max(0, amortizado - adiantamento)
+    adiantamentoSaldo: Math.max(0, moedaCentavos(adiantamento - amortizado)),
+    adiantamentoExcesso: Math.max(0, moedaCentavos(amortizado - adiantamento))
   };
 }
 
@@ -441,7 +446,7 @@ function telaOS(el, id) {
           return '<tr><td>' + (n + 1) + '</td>' +
             '<td>' + esc(i.descricao) +
               '<div class="progresso" style="margin-top:5px"><i style="width:' + Math.min(100, perc) + '%"></i></div></td>' +
-            '<td class="num">' + fmt.numero(i.qtd) + ' ' + esc(i.unid || '') + '<div style="font-size:.8rem;color:var(--texto-fraco)">' +
+            '<td class="num">' + fmt.quantidade(i.qtd) + ' ' + esc(i.unid || '') + '<div style="font-size:.8rem;color:var(--texto-fraco)">' +
               fmt.brl(valorItem(i)) + '</div></td>' +
             '<td class="num"><b>' + fmt.numero(perc, 0) + '%</b><div style="font-size:.8rem;color:var(--texto-fraco)">' +
               fmt.brl(valorItem(i) * perc / 100) + '</div></td>' +
@@ -496,8 +501,11 @@ function telaOS(el, id) {
             '</div></div>';
         }).join('')
           : '<p class="legenda">Nenhuma medição ainda. É por ela que o pagamento é liberado.</p>') +
-        ((t.lancamentosAdiantamento || []).length
+        (t.adiantamentoInicial || (t.lancamentosAdiantamento || []).length
           ? '<div style="margin-top:12px"><h3 style="font-size:.92rem">💵 Adiantamentos</h3>' +
+            (t.adiantamentoInicial ? '<div class="arquivo-solto"><span class="ic">💵</span><div style="flex:1;min-width:0">' +
+              '<div class="nome">' + fmt.brl(t.adiantamentoInicial) + ' · Inicial do contrato</div>' +
+              '<div class="meta">Valor informado no cadastro do contrato.</div></div></div>' : '') +
             t.lancamentosAdiantamento.map((a) =>
               '<div class="arquivo-solto"><span class="ic">💵</span><div style="flex:1;min-width:0">' +
               '<div class="nome">' + fmt.brl(a.valor) + ' · ' + fmt.data(a.em) + '</div>' +
@@ -689,7 +697,7 @@ function novaMedicao(o) {
             const ant = percMedido(o, i.id);
             return '<div class="med-linha" data-item="' + esc(i.id) + '">' +
               '<div class="med-etapa"><b>' + esc(i.descricao) + '</b>' +
-                '<div class="med-sub">' + fmt.numero(i.qtd) + ' ' + esc(i.unid || '') + ' · ' + fmt.brl(valorItem(i)) + '</div></div>' +
+                '<div class="med-sub">' + fmt.quantidade(i.qtd) + ' ' + esc(i.unid || '') + ' · ' + fmt.brl(valorItem(i)) + '</div></div>' +
               '<div class="med-ant"><span class="med-rot">Já medido</span>' + fmt.numero(ant, 0) + '%</div>' +
               '<div class="med-perc"><span class="med-rot">Executado total (%)</span>' +
                 '<input type="text" inputmode="decimal" data-perc="' + esc(i.id) + '" ' +
@@ -767,20 +775,22 @@ function lerLinhasMedicao(o) {
     let perc = numeroBR(inp.value);
     if (perc > 100) perc = 100;
     if (perc < 0) perc = 0;
-    return { item: i, ant, perc, valorPeriodo: valorItem(i) * Math.max(0, perc - ant) / 100 };
+    return { item: i, ant, perc, valorPeriodo: moedaCentavos(valorItem(i) * Math.max(0, perc - ant) / 100) };
   }).filter(Boolean);
 }
 
 function lerDescontosMedicao() {
-  return Array.from(document.querySelectorAll('[data-desc]')).map((l) => ({
+  return Array.from(modalAtual().querySelectorAll('[data-desc]')).map((l) => ({
     id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
     descricao: (l.querySelector('[data-d=descricao]').value || '').trim(),
     tipo: l.querySelector('[data-d=tipo]').value,
-    valor: numeroBR(l.querySelector('[data-d=valor]').value)
+    valor: moedaCentavos(numeroBR(l.querySelector('[data-d=valor]').value))
   })).filter((d) => d.valor > 0);
 }
 
 function recalcMedicao(o, retPerc) {
+  const atual = achar('os', o.id);
+  if (atual) o = atual;
   const linhas = lerLinhasMedicao(o);
   let bruto = 0;
   for (const l of linhas) {
@@ -794,7 +804,8 @@ function recalcMedicao(o, retPerc) {
       if (linha) linha.classList.toggle('med-erro', erro);
     }
   }
-  const retencao = bruto * retPerc / 100;
+  bruto = moedaCentavos(bruto);
+  const retencao = moedaCentavos(bruto * retPerc / 100);
   const descontos = lerDescontosMedicao().reduce((s, d) => s + d.valor, 0);
   const b = document.getElementById('mBruto');
   const q = document.getElementById('mLiquido');
@@ -803,6 +814,22 @@ function recalcMedicao(o, retPerc) {
 }
 
 function salvarMedicao(fundo, o, numero, retPerc) {
+  const atual = achar('os', o.id);
+  if (!atual || atual.apagadoEm || ['cancelada', 'concluida'].includes(atual.situacao)) {
+    toast('Esta ordem foi encerrada ou removida. Os campos continuam aqui para conferência.', 'ruim'); return;
+  }
+  const contrato = (x) => JSON.stringify([x.itens || [], x.retencaoPerc]);
+  if (contrato(atual) !== contrato(o)) {
+    toast('O contrato mudou em outra edição. Confira os campos e reabra a medição com o contrato atualizado.', 'ruim'); return;
+  }
+  const base = (x) => JSON.stringify([x.medicoes || [], x.adiantamento, x.adiantamentos || []]);
+  if (base(atual) !== (fundo._medicaoConferida || base(o))) {
+    fundo._medicaoConferida = base(atual);
+    recalcMedicao(atual, retPerc);
+    toast('Outra medição ou adiantamento chegou. Recalculamos os valores; confira antes de salvar novamente.', 'ruim'); return;
+  }
+  o = atual;
+  numero = Math.max(0, ...(atual.medicoes || []).map((m) => Number(m.numero) || 0)) + 1;
   const d = lerCampos(fundo.querySelector('#fMed'));
   const linhas = lerLinhasMedicao(o);
 
@@ -815,7 +842,7 @@ function salvarMedicao(fundo, o, numero, retPerc) {
     toast('O período está invertido: a data final é anterior à inicial', 'ruim');
     return;
   }
-  const bruto = linhas.reduce((s, l) => s + l.valorPeriodo, 0);
+  const bruto = moedaCentavos(linhas.reduce((s, l) => s + l.valorPeriodo, 0));
   if (bruto <= 0) { toast('Nenhuma etapa avançou nesta medição', 'ruim'); return; }
 
   const descontos = lerDescontosMedicao();
@@ -828,22 +855,21 @@ function salvarMedicao(fundo, o, numero, retPerc) {
     return;
   }
 
-  const retencao = bruto * retPerc / 100;
+  const retencao = moedaCentavos(bruto * retPerc / 100);
   const totalDesc = descontos.reduce((s, x) => s + x.valor, 0);
-  const liquido = bruto - retencao - totalDesc;
+  const liquido = moedaCentavos(bruto - retencao - totalDesc);
   if (liquido < 0) { toast('Os descontos passaram do valor da medição', 'ruim'); return; }
 
   const m = {
     id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
     numero, de: d.de, ate: d.ate, em: new Date().toISOString(), por: S.quem || '—',
-    itens: linhas.map((l) => ({ itemId: l.item.id, perc: l.perc, valorPeriodo: l.valorPeriodo })),
+    itens: linhas.map((l) => ({ itemId: l.item.id, perc: l.perc, percAnterior: l.ant, valorPeriodo: l.valorPeriodo })),
     bruto, retencaoPerc: retPerc, retencao, descontos, liquido,
     situacao: 'rascunho', obs: d.obs
   };
   // Relê o registro na hora de gravar: o modal fica aberto por minutos e nesse
   // tempo o outro aparelho pode ter lançado um aditivo. Gravar por cima do
   // retrato antigo apagava as etapas novas (itens não é campo de união).
-  const atual = achar('os', o.id) || o;
   const n = Object.assign({}, atual, { medicoes: [...(atual.medicoes || []), m] });
   if (atual.situacao === 'emitida') n.situacao = 'andamento';
   n.historico = historiar(atual, 'Medição ' + String(numero).padStart(2, '0') + ' lançada: bruto ' +

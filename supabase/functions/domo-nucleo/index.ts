@@ -19,14 +19,15 @@ import { json, preflight } from "../_shared/cors.ts";
 import { COLECOES } from "../_shared/colecoes.ts";
 import {
   PERFIS, identificar, cfgSemSegredo, podeFazer, motivoRecusa, reporProtegidos,
-  filtrarLeitura, hashGuardado, perfilDe, sha256, COLECOES_SO_DIRECAO, type Quem,
+  filtrarLeitura, podeLerRegistro, hashGuardado, perfilDe, sha256, COLECOES_SO_DIRECAO, type Quem,
 } from "../_shared/acesso.ts";
+import { validarRegistro, moedaServidor } from "../_shared/validacao.ts";
 import { arquivosDoRegistro } from "../_shared/arquivos.ts";
 import {
   db, agora, idNovo, tokenCurto, lerUm, gravarUm, lerTudo, apagarDeVez,
   lerCfgBruta, gravarCfg, proximoNumero, guardarIndiceNumero, lerNumeracao,
   definirNumeracao, registrarLog, lerLog, gravarBackup, apagarArquivo,
-  marcarMudanca,
+  marcarMudanca, gravarSeInalterado, atualizarRegistro, lerApagados,
 } from "../_shared/dados.ts";
 
 const NOMES_COLECOES = Object.keys(COLECOES);
@@ -94,7 +95,7 @@ const CAMPOS_UNIAO = ["historico", "recebimentos", "cotacoes", "anexos", "medico
 // Dentro de cada item unido, estas listas também se juntam em vez de se
 // sobrepor (as remessas e as entregas moram DENTRO da etapa; os preços moram
 // DENTRO do fornecedor convidado).
-const SUBLISTAS_UNIAO = ["remessas", "entregas", "itens_recebidos"];
+const SUBLISTAS_UNIAO = ["remessas", "entregas", "itens_recebidos", "fotos"];
 const SUBOBJETOS_UNIAO = ["precos"];
 
 function unirPorId(antigo: any, novo: any): any[] {
@@ -120,15 +121,59 @@ function unirPorId(antigo: any, novo: any): any[] {
   return Array.from(vistos.values());
 }
 
+// A base vem do snapshot confirmado, nunca do horário local de uma edição.
+function conferirBase(enviado: any, autorizado: any, atual: any): any {
+  const limpo = { ...autorizado };
+  for (const campo of ['_baseRevisao','_baseExistente','_baseAtualizadoEm','_revisao','_col','_recusado']) delete limpo[campo];
+  if (!atual) {
+    if (enviado._baseExistente === true) throw new Error("Este registro foi removido em outro aparelho. Confira antes de recriar.");
+    return limpo;
+  }
+  const temBase = enviado._baseExistente === true || enviado._baseAtualizadoEm != null || enviado._baseRevisao != null;
+  const revisaoIgual = atual._revisao
+    ? enviado._baseRevisao === atual._revisao
+    : enviado._baseRevisao == null && (enviado._baseAtualizadoEm || null) === (atual.atualizadoEm || null);
+  if (temBase && revisaoIgual) return limpo;
+  const ignorados = new Set(['id','_revisao','atualizadoEm','atualizadoPor','criadoEm','criadoPor']);
+  const mudou = Object.keys(limpo).some((k) => !ignorados.has(k) && !CAMPOS_UNIAO.includes(k) &&
+    JSON.stringify(limpo[k] ?? null) !== JSON.stringify(atual[k] ?? null));
+  // Uma base velha pode acrescentar entradas, nunca reescrever uma entrada
+  // já alterada no servidor. União por id sozinha não detectaria esse conflito.
+  const chave = (x: any) => typeof x === 'string' ? x : x?.id || (x?.em || '') + '|' + (x?.o_que || x?.texto || '');
+  const entradaCompativel = (antes: any, depois: any): boolean => {
+    if (!antes || !depois || typeof antes !== 'object' || typeof depois !== 'object') return JSON.stringify(antes) === JSON.stringify(depois);
+    return Object.keys(depois).every((campo) => {
+      if (SUBLISTAS_UNIAO.includes(campo) && Array.isArray(depois[campo])) {
+        const antigas = new Map((antes[campo] || []).map((x: any) => [chave(x), x]));
+        return depois[campo].every((x: any) => !antigas.has(chave(x)) || entradaCompativel(antigas.get(chave(x)), x));
+      }
+      if (SUBOBJETOS_UNIAO.includes(campo) && depois[campo]) {
+        return Object.keys(depois[campo]).every((k) => !(k in (antes[campo] || {})) || JSON.stringify(antes[campo][k]) === JSON.stringify(depois[campo][k]));
+      }
+      return JSON.stringify(antes[campo]) === JSON.stringify(depois[campo]);
+    });
+  };
+  const mudouEntrada = CAMPOS_UNIAO.some((campo) => {
+    if (!Array.isArray(limpo[campo]) || !Array.isArray(atual[campo])) return false;
+    const antigas = new Map(atual[campo].map((x: any) => [chave(x), x]));
+    return limpo[campo].some((x: any) => antigas.has(chave(x)) && !entradaCompativel(antigas.get(chave(x)), x));
+  });
+  if (mudou || mudouEntrada) throw new Error("Este registro mudou em outro aparelho ou sua edição não tem uma base confirmada. Os dados enviados foram preservados para conferência; atualize antes de tentar novamente.");
+  return limpo;
+}
+
 // arquivosDoRegistro vem de _shared/arquivos.ts — uma cópia só para nucleo,
 // acervo e rotina nunca mais divergirem (era o que deixava o PDF do ASO/anexo
 // escapar da lixeira e do varredor de órfãos).
 
 /* ── Gravação: onde mora a inteligência do sistema ─────────────────────────── */
-async function gravar(col: string, registro: any, por: string): Promise<any> {
+async function gravar(col: string, enviado: any, por: string, autorizar?: (atual: any) => any): Promise<any> {
   if (!COLECOES[col]) throw new Error("Coleção desconhecida: " + col);
-  const id = registro.id || idNovo();
+  const id = enviado.id || idNovo();
+  for (let tentativa = 0; tentativa < 8; tentativa++) {
   const antigo = await lerUm(col, id);
+  const autorizado = autorizar ? await autorizar(antigo) : enviado;
+  const registro = autorizar ? conferirBase(enviado, autorizado, antigo) : autorizado;
   const novo: any = { ...(antigo || {}), ...registro, id };
 
   for (const campo of CAMPOS_UNIAO) {
@@ -170,30 +215,7 @@ async function gravar(col: string, registro: any, por: string): Promise<any> {
       // guardado — então, sem isto, uma entrega concluída pela obra ficaria sem
       // a data em que o material chegou.
       if (!novo.recebidoEm) novo.recebidoEm = agora();
-      for (const sid of (novo.scIds || [])) {
-        try {
-          const sc = await lerUm("sc", sid);
-          if (!sc || sc.situacao === "atendida" || sc.apagadoEm) continue;
-          // Só fecha quando TODAS as ordens daquela solicitação chegaram. Um
-          // pedido dividido em duas compras virava "atendida" na primeira
-          // entrega e o resto do material sumia do radar de todo mundo.
-          let faltaAlguma = false;
-          for (const oid of (sc.ocIds || [])) {
-            if (oid === id) continue;
-            const outra = await lerUm("oc", oid);
-            if (!outra || outra.apagadoEm || outra.situacao === "cancelada") continue;
-            if (outra.situacao !== "entregue") { faltaAlguma = true; break; }
-          }
-          if (faltaAlguma) continue;
-          sc.situacao = "atendida";
-          sc.historico = unirPorId(sc.historico, [{
-            id: idNovo(), em: agora(), por: por || "—",
-            o_que: "Material recebido na obra (" + (novo.codigo || "") + ")",
-          }]);
-          sc.atualizadoEm = agora();
-          await gravarUm("sc", sid, sc);
-        } catch { /* fechar a solicitação não pode derrubar a gravação da ordem */ }
-      }
+
     }
   }
 
@@ -205,7 +227,6 @@ async function gravar(col: string, registro: any, por: string): Promise<any> {
   if (pre && !novo.numero) {
     novo.numero = await proximoNumero(col);
     novo.codigo = pre + "-" + String(novo.numero).padStart(4, "0");
-    try { await guardarIndiceNumero(col, novo.numero, id); } catch { /* índice é atalho */ }
   }
   if (pre && !novo.codigo && novo.numero) novo.codigo = pre + "-" + String(novo.numero).padStart(4, "0");
   if ((col === "oc" || col === "os") && !novo.tokenPublico) novo.tokenPublico = tokenCurto();
@@ -224,10 +245,45 @@ async function gravar(col: string, registro: any, por: string): Promise<any> {
       r && !r.token ? { ...r, token: tokenCurto() } : r);
   }
 
-  await gravarUm(col, id, novo);
+  validarRegistro(col, novo, antigo);
+  if (!await gravarSeInalterado(col, id, antigo, novo)) continue;
+  if (pre && novo.numero) {
+    try { await guardarIndiceNumero(col, novo.numero, id); } catch { /* índice é atalho */ }
+  }
+  // Só fecha solicitações depois de a entrega ter sido confirmada no banco.
+  if (col === "oc" && novo.situacao === "entregue") {
+      for (const sid of (novo.scIds || [])) {
+        try {
+          await atualizarRegistro("sc", sid, async (sc: any) => {
+          if (!sc || sc.situacao === "atendida" || sc.apagadoEm) return sc;
+          // Só fecha quando TODAS as ordens daquela solicitação chegaram. Um
+          // pedido dividido em duas compras virava "atendida" na primeira
+          // entrega e o resto do material sumia do radar de todo mundo.
+          let faltaAlguma = false;
+          for (const oid of (sc.ocIds || [])) {
+            if (oid === id) continue;
+            const outra = await lerUm("oc", oid);
+            if (!outra || outra.apagadoEm || outra.situacao === "cancelada") continue;
+            if (outra.situacao !== "entregue") { faltaAlguma = true; break; }
+          }
+          if (faltaAlguma) return sc;
+          sc.situacao = "atendida";
+          sc.historico = unirPorId(sc.historico, [{
+            id: idNovo(), em: agora(), por: por || "—",
+            o_que: "Material recebido na obra (" + (novo.codigo || "") + ")",
+          }]);
+          sc.atualizadoEm = agora();
+          return sc;
+          });
+          await marcarMudanca("sc");
+        } catch { /* fechar a solicitação não pode derrubar a gravação da ordem */ }
+      }
+  }
   await marcarMudanca(col);
   novo._col = col;
   return novo;
+  }
+  throw new Error("O registro mudou em outro aparelho. Atualize e tente novamente.");
 }
 
 /* ── Limpeza do que vem de fora (solicitação pública) ──────────────────────── */
@@ -474,24 +530,35 @@ Deno.serve(async (req) => {
         });
       }
 
-      // Recusa item a item, NUNCA o pacote inteiro: o almoxarife manda o
+      // Em clientes do protocolo atual, recusa item a item: o almoxarife manda o
       // recebimento e a solicitação no mesmo lote, e barrar tudo por causa de
       // um item fazia o app descartar o recebimento junto — trabalho de uma
       // manhã inteira sumindo por causa de uma linha proibida.
       case "salvarLote": {
+        // A versão antiga descarta itens recusados em respostas 200. Interromper
+        // ANTES de gravar qualquer item mantém a fila antiga intacta até atualizar.
+        if (body.protocoloEnvio !== 2) return json({
+          error: "Atualize o Domo para sincronizar com segurança. Seus lançamentos permanecem neste aparelho; não limpe os dados do navegador.",
+          atualizacaoNecessaria: true,
+        }, 426);
         const itens = Array.isArray(body.itens) ? body.itens : [];
         if (!itens.length) return json({ ok: true, salvos: [] });
         const salvos: any[] = [];
         const recusados: any[] = [];
         for (const it of itens) {
           if (!it || !it.colecao || !it.registro) continue;
+          try {
           const atual = it.registro.id ? await lerUm(it.colecao, it.registro.id) : null;
           // Compromisso tem regra própria: o dono é carimbado aqui, e quem não é
           // da direção só mexe no que é seu (mas pode ENCAMINHAR para outro).
           if (it.colecao === "comp") {
             const pronto = prepararComp(quem, cfg, it.registro, atual);
             if (pronto.erro) { recusados.push({ colecao: "comp", id: it.registro.id, motivo: pronto.erro }); continue; }
-            salvos.push(await gravar("comp", pronto.registro, por));
+            salvos.push(await gravar("comp", it.registro, por, (maisAtual: any) => {
+              const p = prepararComp(quem, cfg, it.registro, maisAtual);
+              if (p.erro) throw new Error(p.erro);
+              return p.registro;
+            }));
             continue;
           }
           // RH: só a direção grava (salário, saúde). O escritório não é 'obra',
@@ -571,7 +638,15 @@ Deno.serve(async (req) => {
           const reg = reporProtegidos(quem, it.colecao, it.registro, atual);
           const motivo = motivoRecusa(quem, it.colecao, reg, atual);
           if (motivo) { recusados.push({ colecao: it.colecao, id: it.registro.id, motivo }); continue; }
-          salvos.push(await gravar(it.colecao, reg, por));
+          salvos.push(await gravar(it.colecao, it.registro, por, (maisAtual: any) => {
+            const limpo = reporProtegidos(quem, it.colecao, it.registro, maisAtual);
+            const erro = motivoRecusa(quem, it.colecao, limpo, maisAtual);
+            if (erro) throw new Error(erro);
+            return limpo;
+          }));
+          } catch (e) {
+            recusados.push({ colecao: it.colecao, id: it.registro.id, motivo: (e as Error).message });
+          }
         }
         if (recusados.length) {
           await registrarLog({
@@ -585,12 +660,14 @@ Deno.serve(async (req) => {
         if (colsLog.length) {
           await registrarLog({ acao: "salvou", por, qtd: colsLog.length, cols: colsLog.join(",") });
         }
-        return json({ ok: true, salvos, recusados });
+        return json({ ok: true, salvos: filtrarLeitura(quem, salvos),
+          confirmados: salvos.map((r) => ({ colecao: r._col, id: r.id, atualizadoEm: r.atualizadoEm, _revisao: r._revisao })), recusados });
       }
 
       // Lixeira: marca apagadoEm em vez de sumir com o registro.
       case "apagar": {
         const { colecao, id } = body;
+        if (!COLECOES[colecao]) return json({ error: "Coleção desconhecida." }, 400);
         // RH só a direção (o escritório não é 'obra', então podeFazer o deixaria
         // apagar; a leitura ele nem tem, mas a régua tem que valer aqui também).
         if (COLECOES_SO_DIRECAO.has(colecao) && perfilDe(quem) !== "direcao") {
@@ -598,9 +675,14 @@ Deno.serve(async (req) => {
         }
         const r = await lerUm(colecao, id);
         if (!r) return json({ ok: true });
-        r.apagadoEm = agora();
-        r.apagadoPor = por;
-        await gravarUm(colecao, id, r);
+        if (!podeLerRegistro(quem, { ...r, _col: colecao })) {
+          return json({ error: "Seu acesso não permite este registro.", semPermissao: true }, 403);
+        }
+        await atualizarRegistro(colecao, id, (atual: any) => {
+          if (!atual) return null;
+          if (!podeLerRegistro(quem, { ...atual, _col: colecao })) throw new Error("Seu acesso não permite este registro.");
+          return { ...atual, apagadoEm: agora(), apagadoPor: por };
+        });
         await marcarMudanca(colecao);
         await registrarLog({ acao: "apagou", por, colecao, id, codigo: r.codigo || r.nome });
         return json({ ok: true });
@@ -610,11 +692,14 @@ Deno.serve(async (req) => {
       // com os arquivos que só aquele registro usava — senão uma planta de 60MB
       // ficaria ocupando espaço para sempre depois de apagada.
       case "esvaziarLixeira": {
-        const { data } = await db.from("domo_registros").select("colecao, id, registro").eq("apagado", true);
+        const data = await lerApagados();
+        const vivos = await lerTudo(null, NOMES_COLECOES);
+        const usados = new Set(vivos.filter((r: any) => !r.apagadoEm).flatMap(arquivosDoRegistro));
         let apagados = 0, arquivos = 0;
         for (const linha of (data || [])) {
           const o = linha.registro as any;
           for (const idArq of arquivosDoRegistro(o)) {
+            if (usados.has(idArq)) continue;
             const meta = await lerUm("_arqmeta", idArq);
             const partes = (meta && meta.partes) || 1;
             const chaves = [idArq + "/meta"];
@@ -644,6 +729,7 @@ Deno.serve(async (req) => {
 
       case "restaurarItem": {
         const { colecao, id } = body;
+        if (!COLECOES[colecao]) return json({ error: "Coleção desconhecida." }, 400);
         const r = await lerUm(colecao, id);
         if (!r) return json({ ok: false, error: "Não encontrado" }, 404);
         delete r.apagadoEm; delete r.apagadoPor;
@@ -757,12 +843,22 @@ Deno.serve(async (req) => {
       }
 
       case "responderCotacao": {
+        for (let tentativa = 0; tentativa < 8; tentativa++) {
         const c = await lerUm("cot", body.id);
+        const esperado = c && structuredClone(c);
         if (!c || c.apagadoEm) return json({ ok: false, error: "Cotação não encontrada" }, 404);
         if (c.situacao !== "aberta") return json({ ok: false, error: "Esta cotação já foi encerrada" }, 403);
         const i = (c.fornecedores || []).findIndex((x: any) => x.token && x.token === body.t);
         if (i < 0) return json({ ok: false, error: "Link inválido" }, 403);
 
+        if (body.frete != null && (!Number.isFinite(Number(body.frete)) || Number(body.frete) < 0)) {
+          return json({ ok: false, error: "Frete deve ser um valor válido, maior ou igual a zero." }, 400);
+        }
+        for (const valor of Object.values(body.precos || {})) {
+          if (valor !== "" && valor != null && (!Number.isFinite(Number(valor)) || Number(valor) < 0)) {
+            return json({ ok: false, error: "Preço inválido." }, 400);
+          }
+        }
         const precos: Record<string, number> = {};
         for (const it of (c.itens || [])) {
           const v = num((body.precos || {})[it.id]);
@@ -771,8 +867,8 @@ Deno.serve(async (req) => {
         if (!Object.keys(precos).length) return json({ ok: false, error: "Informe o preço de pelo menos um item" }, 400);
 
         const f = c.fornecedores[i];
-        const total = (c.itens || []).reduce((s2: number, it: any) =>
-          s2 + (precos[it.id] || 0) * (Number(it.qtd) || 0), 0) + num(body.frete);
+        const total = moedaServidor((c.itens || []).reduce((s2: number, it: any) =>
+          s2 + moedaServidor((precos[it.id] || 0) * (Number(it.qtd) || 0)), 0) + num(body.frete));
 
         c.fornecedores[i] = {
           ...f, precos, frete: num(body.frete), total,
@@ -789,9 +885,10 @@ Deno.serve(async (req) => {
             total.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }),
         }]);
         c.atualizadoEm = agora();
-        await gravarUm("cot", c.id, c);
+        if (!await gravarSeInalterado("cot", c.id, esperado, c)) continue;
         await marcarMudanca("cot");
-        return json({ ok: true, total });
+        return json({ ok: true, total });        }
+        return json({ ok: false, error: "O registro mudou enquanto você respondia. Tente novamente." }, 409);
       }
 
       // ── PÚBLICO: o fornecedor vê as datas dele e diz se atende ─────────────
@@ -826,7 +923,9 @@ Deno.serve(async (req) => {
       }
 
       case "responderPrazo": {
+        for (let tentativa = 0; tentativa < 8; tentativa++) {
         const c = await lerUm("crono", body.id);
+        const esperado = c && structuredClone(c);
         if (!c || c.apagadoEm) return json({ ok: false, error: "Cronograma não encontrado" }, 404);
         if (c.situacao !== "ativo") return json({ ok: false, error: "Este cronograma foi encerrado" }, 403);
         const r0 = (c.responsaveis || []).find((x: any) => x.token && x.token === body.t);
@@ -868,14 +967,17 @@ Deno.serve(async (req) => {
             (body.justificativa ? ": " + txt(body.justificativa, 200) : ""),
         }]);
         c.atualizadoEm = agora();
-        await gravarUm("crono", c.id, c);
+        if (!await gravarSeInalterado("crono", c.id, esperado, c)) continue;
         await marcarMudanca("crono");
-        return json({ ok: true });
+        return json({ ok: true });        }
+        return json({ ok: false, error: "O registro mudou enquanto você respondia. Tente novamente." }, 409);
       }
 
       // ── PÚBLICO: o fornecedor relata o que já entregou ─────────────────────
       case "relatarEntrega": {
+        for (let tentativa = 0; tentativa < 8; tentativa++) {
         const c = await lerUm("crono", body.id);
+        const esperado = c && structuredClone(c);
         if (!c || c.apagadoEm) return json({ ok: false, error: "Cronograma não encontrado" }, 404);
         if (c.situacao !== "ativo") return json({ ok: false, error: "Este cronograma foi encerrado" }, 403);
         const r0 = (c.responsaveis || []).find((x: any) => x.token && x.token === body.t);
@@ -883,6 +985,7 @@ Deno.serve(async (req) => {
         const i = (c.etapas || []).findIndex((e: any) => e.id === body.etapaId && e.responsavelId === r0.id);
         if (i < 0) return json({ ok: false, error: "Etapa não encontrada" }, 404);
 
+        if (!Number.isFinite(Number(body.qtd || 0)) || Number(body.qtd || 0) < 0) return json({ error: "Quantidade inválida." }, 400);
         const rel = {
           id: idNovo(), em: agora(), por: txt(body.por, 80) || r0.nome,
           data: txt(body.data, 10), nf: txt(body.nf, 40), qtd: num(body.qtd),
@@ -897,14 +1000,17 @@ Deno.serve(async (req) => {
             (rel.qtd ? " — " + rel.qtd : "") + (rel.nf ? " · NF " + rel.nf : ""),
         }]);
         c.atualizadoEm = agora();
-        await gravarUm("crono", c.id, c);
+        if (!await gravarSeInalterado("crono", c.id, esperado, c)) continue;
         await marcarMudanca("crono");
-        return json({ ok: true });
+        return json({ ok: true });        }
+        return json({ ok: false, error: "O registro mudou enquanto você respondia. Tente novamente." }, 409);
       }
 
       // ── PÚBLICO: o fornecedor sugere uma etapa ─────────────────────────────
       case "sugerirEtapa": {
+        for (let tentativa = 0; tentativa < 8; tentativa++) {
         const c = await lerUm("crono", body.id);
+        const esperado = c && structuredClone(c);
         if (!c || c.apagadoEm) return json({ ok: false, error: "Cronograma não encontrado" }, 404);
         if (c.situacao !== "ativo") return json({ ok: false, error: "Este cronograma foi encerrado" }, 403);
         const r0 = (c.responsaveis || []).find((x: any) => x.token && x.token === body.t);
@@ -926,9 +1032,10 @@ Deno.serve(async (req) => {
             (etapa.inicio ? " para " + etapa.inicio : "") + " — esperando sua aprovação",
         }]);
         c.atualizadoEm = agora();
-        await gravarUm("crono", c.id, c);
+        if (!await gravarSeInalterado("crono", c.id, esperado, c)) continue;
         await marcarMudanca("crono");
-        return json({ ok: true });
+        return json({ ok: true });        }
+        return json({ ok: false, error: "O registro mudou enquanto você respondia. Tente novamente." }, 409);
       }
 
       // ── Configurações ──────────────────────────────────────────────────────
@@ -1056,14 +1163,29 @@ Deno.serve(async (req) => {
         }
         // A numeração acompanha o que foi restaurado, senão o próximo documento
         // sairia com um número que já existe.
+        for (const col of NOMES_COLECOES) {
+          const n = body.seq && body.seq["ultimo_" + col]?.n;
+          if (Number.isSafeInteger(n) && n >= 0) maiorNumero[col] = Math.max(maiorNumero[col] || 0, n);
+        }
         const atual = await lerNumeracao();
         for (const [col, maior] of Object.entries(maiorNumero)) {
           const ja = atual["ultimo_" + col];
           if (!ja || (ja.n || 0) < maior) await definirNumeracao(col, maior);
         }
-        await marcarMudanca(Object.keys(maiorNumero));
+        if (body.cfg && typeof body.cfg === "object" && !Array.isArray(body.cfg)) {
+          const restaurada = { ...cfg };
+          // Exportação não carrega credenciais: restaurar não apaga nem inventa acessos.
+          for (const campo of Object.keys(CFG_PADRAO)) {
+            if (["senhaHash", "usuarios", "atualizadoEm"].includes(campo)) continue;
+            if (Object.prototype.hasOwnProperty.call(body.cfg, campo)) restaurada[campo] = body.cfg[campo];
+          }
+          restaurada.atualizadoEm = agora();
+          await gravarCfg(restaurada);
+        }
+        await marcarMudanca(NOMES_COLECOES);
         await registrarLog({ acao: "restaurou backup", por, qtd: n });
-        return json({ ok: true, restaurados: n });
+        return json({ ok: true, restaurados: n, arquivosRestaurados: false,
+          aviso: "Dados e configurações restaurados. Os bytes dos anexos dependem de cópia separada do Storage; acessos atuais foram preservados." });
       }
 
       default:

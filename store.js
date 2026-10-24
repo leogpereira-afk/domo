@@ -46,7 +46,11 @@ const S = {
   sincronizando: false,
   ultimoPull: 0,
   online: navigator.onLine,
-  erroSync: ''
+  erroSync: '',
+  erroCache: '',
+  erroFila: '',
+  erroArquivos: '',
+  fotosPendentes: 0
 };
 
 const K = {
@@ -76,8 +80,9 @@ async function sha256(txt) {
 /* ── Chamada ao servidor ───────────────────────────────────────────────────── */
 async function api(action, dados = {}, opts = {}) {
   const headers = { 'Content-Type': 'application/json', 'x-token': TOKEN };
-  if (S.senhaHash && !opts.publico) headers['x-senha'] = S.senhaHash;
-  if (S.quem) headers['x-quem'] = encodeURIComponent(S.quem);
+  const sessao = opts.sessao || S;
+  if (sessao.senhaHash && !opts.publico) headers['x-senha'] = sessao.senhaHash;
+  if (sessao.quem) headers['x-quem'] = encodeURIComponent(sessao.quem);
   // Prazo máximo: no 4G do canteiro a conexão "pendura" (fica aberta sem
   // resposta) e sem isso a promessa nunca voltava — travando a tela atrás dela.
   const ctrl = new AbortController();
@@ -120,62 +125,121 @@ function semInternetParaApagar() {
 }
 
 /* ── Cache local ───────────────────────────────────────────────────────────── */
-function lerCache() {
-  try {
-    const c = JSON.parse(localStorage.getItem(K.cache) || 'null');
-    if (c && c.reg) { S.reg = Object.assign(S.reg, c.reg); S.cfg = c.cfg || null; S.ultimoPull = c.em || 0; }
-  } catch { /* cache corrompido: começa limpo */ }
-  try { S.fila = JSON.parse(localStorage.getItem(K.fila) || '[]'); } catch { S.fila = []; }
-  // O contador PRECISA continuar de onde parou. Se recomeçar do zero, um número
-  // novo colide com um já gravado e o envio apaga da fila algo que nunca subiu.
-  // Entradas de versões antigas do app (sem seq) ganham um número aqui.
-  S.seqFila = S.fila.reduce((m, f) => Math.max(m, Number(f.seq) || 0), 0);
-  let faltando = false;
-  for (const f of S.fila) if (!f.seq) { f.seq = ++S.seqFila; faltando = true; }
-  if (faltando) { try { localStorage.setItem(K.fila, JSON.stringify(S.fila)); } catch { /* segue */ } }
-  S.quem = localStorage.getItem(K.quem) || '';
-  S.senhaHash = localStorage.getItem(K.senha) || '';
-  S.perfil = localStorage.getItem(K.perfil) || 'obra';   // recusa por omissão; o snapshot corrige em segundos
-  S.usuarioId = localStorage.getItem(K.usuario) || '';
-  S.acessoProprio = !!S.usuarioId;
-  // Se o cache tiver se perdido (memória cheia), a fila reconstrói o que ainda
-  // não subiu — senão o trabalho feito sem sinal some da tela ao reabrir o app.
-  for (const f of S.fila) {
-    const arr = S.reg[f.colecao] || (S.reg[f.colecao] = []);
-    const i = arr.findIndex((r) => r.id === f.registro.id);
-    const rec = Object.assign({}, f.registro, { _pendente: true });
-    if (i >= 0) arr[i] = rec; else arr.unshift(rec);
-  }
+// Uma operação por chave: setItem é atômico. Nenhuma aba regrava uma lista
+// que pode ter ficado velha. IDs únicos também identificam exatamente o ACK.
+const PREFIXO_FILA = 'domo_fila_v2:';
+const chaveOperacao = (op) => PREFIXO_FILA + op;
+function impressaoLocal(texto) {
+  let a = 2166136261, b = 5381;
+  for (const c of texto) { a = Math.imul(a ^ c.charCodeAt(0), 16777619); b = Math.imul(b, 33) ^ c.charCodeAt(0); }
+  return (a >>> 0).toString(16) + (b >>> 0).toString(16);
 }
-
-function gravarCache() {
-  try {
-    localStorage.setItem(K.cache, JSON.stringify({ reg: S.reg, cfg: S.cfg, em: Date.now() }));
-  } catch (e) {
-    console.warn('cache cheio:', e && e.message);
-  }
+function donoFila() {
+  if (S.usuarioId) return 'usuario:' + S.usuarioId;
+  if (!S.senhaHash) return '';
+  // Identificador local, não é credencial nem controle de autorização.
+  return 'equipe:' + impressaoLocal(S.senhaHash + '|' + S.quem);
 }
-
-// A fila é o que segura o trabalho feito sem internet: se ela não couber no
-// aparelho, o usuário PRECISA saber (o cache pode falhar calado, a fila não).
-function gravarFila() {
-  try {
-    localStorage.setItem(K.fila, JSON.stringify(S.fila));
-    return true;
-  } catch (e) {
-    // Tenta abrir espaço jogando fora o cache (ele se refaz no próximo snapshot).
-    try {
-      localStorage.removeItem(K.cache);
-      localStorage.setItem(K.fila, JSON.stringify(S.fila));
-      return true;
-    } catch (e2) {
-      S.erroSync = 'memória do aparelho cheia — não consigo guardar offline';
+function novaOperacao() { return crypto.randomUUID(); }
+function gravarOperacao(f) {
+  const chave = chaveOperacao(f.op);
+  const texto = JSON.stringify(f);
+  try { localStorage.setItem(chave, texto); }
+  catch {
+    // O cache pode ser baixado de novo; a fila nunca é descartável.
+    try { localStorage.removeItem(K.cache); localStorage.setItem(chave, texto); }
+    catch {
+      const msg = 'Memória do aparelho cheia: não foi possível guardar. Mantenha este formulário aberto e tente novamente.';
+      S.erroSync = msg;
       document.dispatchEvent(new CustomEvent('domo:status'));
-      toast('Memória do aparelho cheia. Conecte à internet antes de continuar.', 'ruim');
-      return false;
+      toast(msg, 'ruim');
+      const erro = new Error(msg); erro.code = 'DOMO_STORAGE_FULL'; throw erro;
     }
   }
 }
+function atualizarFila() {
+  const dono = donoFila();
+  const fila = [];
+  // Guardar primeiro a lista de chaves evita índices deslocados por outra aba.
+  const chaves = [];
+  for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith(PREFIXO_FILA)) chaves.push(k); }
+  for (const k of chaves) {
+    const texto = localStorage.getItem(k);
+    if (!texto) continue;
+    try { const f = JSON.parse(texto); if (f.dono === dono && f.registro && f.op) fila.push(f); }
+    catch { S.erroFila = 'Há uma pendência local ilegível. Preserve os dados deste aparelho e solicite recuperação.'; }
+  }
+  fila.sort((a, b) => String(a.em || '').localeCompare(String(b.em || '')) || a.op.localeCompare(b.op));
+  // Uma edição nova substitui SOMENTE a versão que o editor conhecia. Duas
+  // abas editando versões diferentes ficam ambas recuperáveis, sem last-write-wins.
+  const substituidas = new Set(fila.flatMap(f => f.substitui || []));
+  S.fila = fila.filter(f => !substituidas.has(f.op));
+  S.seqFila = Math.max(S.seqFila, ...S.fila.map(f => Number(f.seq) || 0));
+  return S.fila;
+}
+function restaurarPendencias() {
+  atualizarFila();
+  const contagem = new Map();
+  for (const f of S.fila) { const k = f.colecao + '|' + f.registro.id; contagem.set(k, (contagem.get(k) || 0) + 1); }
+  for (const f of S.fila) {
+    const arr = S.reg[f.colecao] || (S.reg[f.colecao] = []);
+    const i = arr.findIndex(r => r.id === f.registro.id);
+    const conflito = contagem.get(f.colecao + '|' + f.registro.id) > 1;
+    const rec = Object.assign({}, f.registro, { _opLocal: f.op, _pendente: !f.recusado && !conflito,
+      _recusado: f.recusado || (conflito ? 'Alterações em abas diferentes. Confira as versões em Pendências.' : null) });
+    if (i >= 0) arr[i] = rec; else arr.unshift(rec);
+  }
+}
+function migrarFilaAntiga() {
+  const texto = localStorage.getItem(K.fila);
+  if (!texto) return;
+  let antigas;
+  try { antigas = JSON.parse(texto); if (!Array.isArray(antigas) || antigas.some(f => !f || !COLECOES_APP.includes(f.colecao) || !f.registro || typeof f.registro !== 'object' || !f.registro.id)) throw new Error(); }
+  catch { S.erroFila = 'Fila antiga ilegível: preserve os dados deste aparelho para recuperação.'; return; }
+  const dono = donoFila();
+  if (!dono) return;
+  const donoAntigo = localStorage.getItem('domo_fila_v1_dono');
+  if (donoAntigo && donoAntigo !== dono) return;
+  // O dono legado só pode ser estabelecido pela sessão lembrada no aparelho.
+  if (!donoAntigo && (!localStorage.getItem(K.senha) || localStorage.getItem(K.senha) !== S.senhaHash)) return;
+  localStorage.setItem('domo_fila_v1_dono', dono);
+  for (const f of antigas) {
+    const op = 'legado-' + dono + '-' + impressaoLocal(JSON.stringify(f));
+    const recibo = 'domo_migrado_v2:' + op;
+    if (localStorage.getItem(recibo)) continue;
+    if (!localStorage.getItem(chaveOperacao(op))) gravarOperacao(Object.assign({}, f, { op, dono, em: f.registro.atualizadoEm || '', substitui: [] }));
+    // O recibo impede reimportação depois do ACK. A origem NÃO é apagada: uma
+    // aba v1 ainda aberta pode estar gravando nela no mesmo instante.
+    localStorage.setItem(recibo, '1');
+  }
+  S.erroFila = '';
+}
+function lerCache() {
+  S.quem = localStorage.getItem(K.quem) || '';
+  S.senhaHash = localStorage.getItem(K.senha) || '';
+  S.perfil = localStorage.getItem(K.perfil) || 'obra';
+  S.usuarioId = localStorage.getItem(K.usuario) || '';
+  S.acessoProprio = !!S.usuarioId;
+  try {
+    const c = JSON.parse(localStorage.getItem(K.cache) || 'null');
+    if (c && c.reg && (!c.dono || c.dono === donoFila()) && S.senhaHash) { S.reg = Object.assign(S.reg, c.reg); S.cfg = c.cfg || null; S.ultimoPull = c.em || 0; }
+  } catch { S.erroCache = 'Cópia offline indisponível neste aparelho. Conecte para atualizar.'; }
+  try { migrarFilaAntiga(); } catch { S.erroFila = 'Não foi possível concluir a migração das pendências. A origem foi preservada; libere espaço neste aparelho.'; }
+  restaurarPendencias();
+}
+function gravarCache() {
+  try {
+    localStorage.setItem(K.cache, JSON.stringify({ reg: S.reg, cfg: S.cfg, dono: donoFila(), em: Date.now() }));
+    S.erroCache = '';
+    return true;
+  } catch {
+    S.erroCache = 'Cópia offline incompleta neste aparelho. Os envios confirmados continuam no servidor.';
+    document.dispatchEvent(new CustomEvent('domo:status'));
+    return false;
+  }
+}
+// Compatibilidade com a inicialização/testes antigos: nunca substitui a fila.
+function gravarFila() { for (const f of S.fila) gravarOperacao(f); return true; }
 
 /* ── Consultas ─────────────────────────────────────────────────────────────── */
 // Lista de uma coleção já sem a lixeira e com o mais novo em cima.
@@ -190,34 +254,92 @@ const achar = (col, id) => (S.reg[col] || []).find((r) => r.id === id) || null;
 /* ── Gravação ──────────────────────────────────────────────────────────────── */
 // Salva no aparelho na hora e empurra pra fila. Devolve o registro local.
 function salvar(col, registro, opts = {}) {
-  const id = registro.id || (Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
-  const local = Object.assign({}, achar(col, id) || {}, registro, {
-    id,
-    atualizadoEm: new Date().toISOString(),
-    atualizadoPor: S.quem || '—',
-    _pendente: true,
-    _recusado: null   // tentar de novo limpa a recusa anterior
+  const id = registro.id || novaOperacao();
+  const anterior = achar(col, id);
+  const op = novaOperacao();
+  const local = Object.assign({}, anterior || {}, registro, {
+    id, atualizadoEm: new Date().toISOString(), atualizadoPor: S.quem || '—',
+    _pendente: true, _recusado: null, _opLocal: op
   });
   if (!local.criadoEm) { local.criadoEm = local.atualizadoEm; local.criadoPor = S.quem || '—'; }
+  // A base pertence ao registro que abriu o editor, não a um snapshot que
+  // chegou silenciosamente depois. Edições offline encadeadas mantêm a base.
+  const base = Object.hasOwn(registro, '_baseExistente') || registro.atualizadoEm || registro._opLocal ? registro : anterior;
+  if (base && Object.hasOwn(base, '_baseExistente')) {
+    local._baseExistente = base._baseExistente;
+    local._baseRevisao = base._baseRevisao;
+    local._baseAtualizadoEm = base._baseAtualizadoEm;
+  } else if (!base || !(base._pendente || base._opLocal || base._recusado)) {
+    local._baseExistente = !!anterior;
+    local._baseRevisao = base && base._revisao || null;
+    local._baseAtualizadoEm = base && base.atualizadoEm || null;
+  }
 
+  const dono = donoFila();
+  if (!dono) throw new Error('Entre novamente antes de salvar. O formulário continua aberto.');
+  // Confirma durabilidade ANTES de trocar a tela ou retornar sucesso ao caller.
+  // O predecessor fica explicitamente registrado no mesmo setItem atômico.
+  // Só o objeto que o editor conhecia pode indicar o predecessor. S.reg pode
+  // ter recebido outra versão pelo evento storage enquanto o formulário abria.
+  const baseOp = registro._opLocal;
+  const substitui = opts.substitui || (baseOp ? [baseOp] : []);
+  const ancestrais = new Set(substitui);
+  for (const antiga of substitui) { try { const f = JSON.parse(localStorage.getItem(chaveOperacao(antiga))); for (const id of (f && f.ancestrais || [])) ancestrais.add(id); } catch { /* origem continua preservada */ } }
+  const f = { op, dono, em: local.atualizadoEm, colecao: col, registro: local, seq: ++S.seqFila, substitui, ancestrais: [...ancestrais] };
+  gravarOperacao(f);
+  // Só limpar versões substituídas depois de gravar o sucessor completo.
+  for (const antiga of substitui) localStorage.removeItem(chaveOperacao(antiga));
   const arr = S.reg[col] || (S.reg[col] = []);
-  const i = arr.findIndex((r) => r.id === id);
+  const i = arr.findIndex(r => r.id === id);
   if (i >= 0) arr[i] = local; else arr.unshift(local);
+  atualizarFila();
   gravarCache();
-
-  // Cada entrada leva um número próprio. Sem isso, uma alteração feita enquanto
-  // o envio anterior estava no ar era apagada da fila junto com a antiga.
-  S.fila = S.fila.filter((f) => !(f.colecao === col && f.registro.id === id));
-  S.fila.push({ colecao: col, registro: local, seq: ++S.seqFila });
-  gravarFila();
-
+  document.dispatchEvent(new CustomEvent('domo:status'));
   if (!opts.semSubir) subirFila();
   return local;
 }
 
+// Uma escolha explícita conserva as versões anteriores para baixar/consultar.
+// Não há exclusão silenciosa quando duas abas editaram o mesmo registro.
+const PREFIXO_RECUPERACAO = 'domo_recuperacao_v2:';
+function versoesLocaisPreservadas() {
+  const itens = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k || !k.startsWith(PREFIXO_RECUPERACAO)) continue;
+    try { const f = JSON.parse(localStorage.getItem(k)); if (f && f.dono === donoFila()) itens.push(f); } catch { /* não apaga origem */ }
+  }
+  return itens;
+}
+function resolverPendenciaLocal(op, baseConfirmada) {
+  atualizarFila();
+  const escolhida = S.fila.find(f => f.op === op);
+  if (!escolhida) throw new Error('Essa versão já foi atualizada. Abra Pendências novamente.');
+  const versoes = S.fila.filter(f => f.colecao === escolhida.colecao && f.registro.id === escolhida.registro.id);
+  try {
+    for (const f of versoes) localStorage.setItem(PREFIXO_RECUPERACAO + f.op, JSON.stringify(f));
+    if (baseConfirmada) {
+      const opServidor = 'servidor-' + escolhida.op + '-' + impressaoLocal(JSON.stringify(baseConfirmada));
+      localStorage.setItem(PREFIXO_RECUPERACAO + opServidor, JSON.stringify({
+        op: opServidor, dono: escolhida.dono, colecao: escolhida.colecao, origem: 'servidor',
+        em: new Date().toISOString(), registro: baseConfirmada
+      }));
+    }
+  }
+  catch { throw new Error('Não há espaço para preservar as versões anteriores. Baixe as cópias e libere espaço antes de reenviar.'); }
+  const registro = Object.assign({}, escolhida.registro);
+  if (baseConfirmada !== undefined) {
+    registro._baseExistente = !!baseConfirmada;
+    registro._baseRevisao = baseConfirmada && baseConfirmada._revisao || null;
+    registro._baseAtualizadoEm = baseConfirmada && baseConfirmada.atualizadoEm || null;
+  }
+  return salvar(escolhida.colecao, registro, { substitui: versoes.map(f => f.op) });
+}
+
 /* Contagem de fotos ainda guardadas no aparelho, para a tela poder dizer. */
 async function fotosAindaNoAparelho() {
-  try { return ((await filaArqListar()) || []).length; } catch { return 0; }
+  try { const itens = (await filaArqListar()) || []; S.fotosPendentes = itens.filter(x => !x.dono || x.dono === donoFila()).length; return S.fotosPendentes; }
+  catch { S.erroArquivos = 'Não foi possível conferir as fotos guardadas neste aparelho.'; return null; }
 }
 
 // Acrescenta uma linha no histórico do registro (quem fez, quando, o quê).
@@ -234,76 +356,77 @@ function historiar(registro, o_que) {
 
 let _subindo = false;
 async function subirFila() {
-  if (_subindo || !S.fila.length || !navigator.onLine) return;
+  if (_subindo || !navigator.onLine || !S.senhaHash) return false;
   _subindo = true;
-  const enviando = S.fila.slice(0, 25);
   try {
-    const r = await api('salvarLote', {
-      itens: enviando.map((f) => ({ colecao: f.colecao, registro: limparParaEnvio(f.registro) }))
-    });
-    // Tira da fila SÓ o que foi enviado (pelo número da entrada). Se o usuário
-    // mexeu de novo no mesmo registro durante o envio, a alteração nova fica.
-    // Remove pelas PRÓPRIAS entradas enviadas (identidade), não pelo número —
-    // assim nem um seq repetido leva junto o que não foi enviado.
-    const enviadas = new Set(enviando);
-    S.fila = S.fila.filter((f) => !enviadas.has(f));
-    gravarFila();
-    // O servidor agora recusa ITEM A ITEM (nunca o pacote). Avisa o que ficou
-    // de fora, com nome e motivo — antes o trabalho sumia calado.
-    if ((r.recusados || []).length) {
-      /* O aviso passava e o registro continuava na tela marcado 'enviando…' —
-         para sempre, porque ele já tinha saído da fila. Três minutos depois o
-         snapshot deixava de reinjetá-lo e ele sumia sozinho, sem ninguém
-         entender. Agora a recusa fica CARIMBADA no registro: a tela mostra o
-         motivo no lugar de 'enviando…' e a pessoa decide o que fazer. */
-      for (const rec of r.recusados) {
-        const arr = S.reg[rec.colecao];
-        const alvo = arr && arr.find((x) => x.id === rec.id);
-        if (alvo) { delete alvo._pendente; alvo._recusado = rec.motivo || 'recusado pelo servidor'; }
+    // Web Locks serializa envios entre abas. O diário por operação garante
+    // durabilidade mesmo nos navegadores sem essa API.
+    if (navigator.locks) return await navigator.locks.request('domo-envio-' + donoFila(), enviarFilaDuravel);
+    return await enviarFilaDuravel();
+  } finally { _subindo = false; document.dispatchEvent(new CustomEvent('domo:status')); }
+}
+async function enviarFilaDuravel() {
+  try { migrarFilaAntiga(); } catch { S.erroFila = 'Migração de pendências incompleta: os dados originais foram preservados.'; }
+  atualizarFila();
+  if (S.erroFila) return false;
+  const contagem = new Map();
+  for (const f of S.fila) { const k = f.colecao + '|' + f.registro.id; contagem.set(k, (contagem.get(k) || 0) + 1); }
+  const enviando = S.fila.filter(f => !f.recusado && contagem.get(f.colecao + '|' + f.registro.id) === 1).slice(0, 25);
+  if (!enviando.length) return !S.fila.length;
+  const dono = donoFila();
+  try {
+    const r = await api('salvarLote', { protocoloEnvio: 2, itens: enviando.map(f => ({ colecao: f.colecao, registro: limparParaEnvio(f.registro) })) });
+    const recusas = new Map((r.recusados || []).map(x => [x.colecao + '|' + x.id, x]));
+    const salvos = new Map((r.salvos || []).map(x => [x._col + '|' + x.id, x]));
+    const confirmados = new Map([...salvos].map(([k, x]) => [k, x]));
+    for (const x of (r.confirmados || [])) confirmados.set(x.colecao + '|' + x.id, x);
+    let incompleto = false;
+    for (const f of enviando) {
+      // Se foi substituída em outra aba durante o envio, seu sucessor permanece.
+      const recusa = recusas.get(f.colecao + '|' + f.registro.id);
+      if (recusa) { if (localStorage.getItem(chaveOperacao(f.op))) { f.recusado = recusa.motivo || 'Recusado pelo servidor'; gravarOperacao(f); } }
+      else if (confirmados.has(f.colecao + '|' + f.registro.id)) {
+        const confirmado = confirmados.get(f.colecao + '|' + f.registro.id);
+        atualizarFila();
+        for (const proxima of S.fila) {
+          if (!(proxima.ancestrais || []).includes(f.op) || proxima.registro._baseRevisao !== f.registro._baseRevisao || proxima.registro._baseAtualizadoEm !== f.registro._baseAtualizadoEm) continue;
+          proxima.registro._baseExistente = true; proxima.registro._baseRevisao = confirmado._revisao || null; proxima.registro._baseAtualizadoEm = confirmado.atualizadoEm || null;
+          gravarOperacao(proxima);
+        }
+        localStorage.removeItem(chaveOperacao(f.op));
       }
-      gravarCache();
-      document.dispatchEvent(new CustomEvent('domo:sempermissao', {
-        detail: { qtd: r.recusados.length, msg: r.recusados[0].motivo, itens: r.recusados }
-      }));
+      else incompleto = true; // HTTP 200 sozinho não confirma cada registro.
     }
-    const aindaNaFila = new Set(S.fila.map((f) => f.colecao + '|' + f.registro.id));
-    for (const salvo of (r.salvos || [])) {
-      const col = salvo._col;
-      // Registro com alteração mais nova esperando: não sobrescreve a tela.
-      if (aindaNaFila.has(col + '|' + salvo.id)) continue;
-      const arr = S.reg[col] || (S.reg[col] = []);
-      const i = arr.findIndex((x) => x.id === salvo.id);
+    if (donoFila() !== dono) return false; // logout/troca de sessão durante o request
+    atualizarFila();
+    for (const [chave, confirmado] of confirmados) {
+      if (salvos.has(chave)) continue;
+      const col = confirmado.colecao || confirmado._col;
+      S.reg[col] = (S.reg[col] || []).filter(x => x.id !== confirmado.id);
+    }
+    for (const [chave, salvo] of salvos) {
+      if (S.fila.some(f => f.colecao + '|' + f.registro.id === chave)) continue;
+      const arr = S.reg[salvo._col] || (S.reg[salvo._col] = []);
+      const i = arr.findIndex(x => x.id === salvo.id);
       if (i >= 0) arr[i] = salvo; else arr.unshift(salvo);
     }
+    restaurarPendencias();
     gravarCache();
-    S.erroSync = '';
+    S.erroSync = incompleto ? 'O servidor não confirmou todos os itens. As pendências continuam neste aparelho.' : '';
+    if (recusas.size) document.dispatchEvent(new CustomEvent('domo:sempermissao', { detail: { qtd: recusas.size, msg: [...recusas.values()][0].motivo, itens: [...recusas.values()] } }));
     document.dispatchEvent(new CustomEvent('domo:dados'));
-    if (S.fila.length) setTimeout(subirFila, 300);
+    if (!incompleto && S.fila.some(f => !f.recusado && contagem.get(f.colecao + '|' + f.registro.id) === 1)) setTimeout(subirFila, 300);
+    return !incompleto && !S.fila.length;
   } catch (e) {
-    S.erroSync = e.message || 'falha ao enviar';
-    if (e.semSenha) document.dispatchEvent(new CustomEvent('domo:semsenha'));
-    // Ação inteira negada (não é mais o caso do salvarLote, que recusa item a
-    // item): a fila nunca passaria, então sai — mas o usuário fica sabendo
-    // exatamente o que não foi salvo, com o código de cada documento.
-    if (e.semPermissao) {
-      const enviadas = new Set(enviando);
-      S.fila = S.fila.filter((f) => !enviadas.has(f));
-      gravarFila();
-      document.dispatchEvent(new CustomEvent('domo:sempermissao', {
-        detail: {
-          qtd: enviando.length, msg: e.message,
-          itens: enviando.map((f) => ({ colecao: f.colecao, id: f.registro.id, codigo: f.registro.codigo || '' }))
-        }
-      }));
-    }
-    console.warn('fila:', e.message);
-  } finally {
-    _subindo = false;
-    document.dispatchEvent(new CustomEvent('domo:status'));
+    if (donoFila() === dono) S.erroSync = e.message || 'Falha ao enviar';
+    if (e.semSenha && donoFila() === dono) document.dispatchEvent(new CustomEvent('domo:semsenha'));
+    // A recusa do lote também permanece recuperável, nunca some da fila.
+    if (e.semPermissao) for (const f of enviando) { if (localStorage.getItem(chaveOperacao(f.op))) { f.recusado = e.message || 'Sem permissão'; gravarOperacao(f); } }
+    if (donoFila() === dono) restaurarPendencias();
+    return false;
   }
 }
-
-const limparParaEnvio = (r) => { const c = Object.assign({}, r); delete c._pendente; delete c._recusado; delete c._col; return c; };
+const limparParaEnvio = (r) => { const c = Object.assign({}, r); delete c._pendente; delete c._recusado; delete c._opLocal; delete c._col; return c; };
 
 // Impressão digital barata do que está na tela: id + quando mudou.
 function assinaturaDados() {
@@ -320,14 +443,15 @@ let _puxando = false;
 async function puxar() {
   if (_puxando || !navigator.onLine || !S.senhaHash) return;
   _puxando = true;
+  const donoPull = donoFila();
   S.sincronizando = true;
+  S.erroSync = '';
   document.dispatchEvent(new CustomEvent('domo:status'));
   try {
     await subirFila();
-    // As fotos guardadas no aparelho sobem junto com o resto: a prova da
-    // entrega não pode depender de a pessoa lembrar de reabrir a tela.
-    await subirArquivosPendentes();
+    const erroEnvio = S.erroSync;
     const r = await api('snapshot');
+    if (donoFila() !== donoPull) return false;
     const novo = regVazio();
     for (const reg of (r.registros || [])) {
       const col = reg._col;
@@ -340,6 +464,7 @@ async function puxar() {
       const t = o.atualizadoEm || o.criadoEm;
       return t && (Date.now() - new Date(t).getTime()) < GRACA_MS;
     };
+    restaurarPendencias();
     const naFila = new Set(S.fila.map((f) => f.colecao + '|' + f.registro.id));
     for (const col of Object.keys(novo)) {
       const vindos = new Set(novo[col].map((x) => x.id));
@@ -378,8 +503,10 @@ async function puxar() {
       } catch { /* modo privado: segue sem lembrar */ }
     }
     S.ultimoPull = Date.now();
-    S.erroSync = '';
+    S.erroSync = erroEnvio;
     gravarCache();
+    // Só agora os pais e subitens estão disponíveis para costurar as fotos.
+    await subirArquivosPendentes();
     // Só avisa a tela quando algo REALMENTE mudou. Antes, o sync de 90s
     // redesenhava a página do nada e jogava a rolagem pro topo no meio da leitura.
     const assinatura = assinaturaDados();
@@ -391,13 +518,16 @@ async function puxar() {
       document.dispatchEvent(new CustomEvent('domo:dados'));
     }
   } catch (e) {
-    S.erroSync = e.message || 'falha ao baixar';
-    if (e.semSenha) document.dispatchEvent(new CustomEvent('domo:semsenha'));
+    if (donoFila() === donoPull) {
+      S.erroSync = e.message || 'falha ao baixar';
+      if (e.semSenha) document.dispatchEvent(new CustomEvent('domo:semsenha'));
+    }
   } finally {
     _puxando = false;
     S.sincronizando = false;
     document.dispatchEvent(new CustomEvent('domo:status'));
   }
+  return !S.erroSync && !S.erroFila && !S.erroArquivos && !S.fila.length;
 }
 
 /* ── Arquivos grandes (projetos, documentos, fotos) ────────────────────────── */
@@ -426,16 +556,20 @@ function base64ParaBytes(b64) {
 // planta de 40MB não pode jogar fora o upload inteiro.
 async function enviarArquivo(file, onProgresso, cancelar) {
   const partes = Math.max(1, Math.ceil(file.size / TAM_PARTE));
+  const dono = donoFila();
+  const sessao = { senhaHash: S.senhaHash, quem: S.quem };
+  const conferirSessao = () => { if (!dono || donoFila() !== dono) { const e = new Error('A sessão mudou. O arquivo continua guardado no aparelho.'); e.status = 401; throw e; } };
+  conferirSessao();
   const ini = await apiArq('iniciar', {
     nome: file.name, mime: file.type || 'application/octet-stream', tamanho: file.size, partes
-  });
+  }, { sessao });
   for (let i = 0; i < partes; i++) {
     if (cancelar && cancelar.pedido) throw new Error('envio cancelado');
     const pedaco = file.slice(i * TAM_PARTE, Math.min(file.size, (i + 1) * TAM_PARTE));
     const dados = bytesParaBase64(await pedaco.arrayBuffer());
     let ultimoErro = null;
     for (let tent = 0; tent < 3; tent++) {
-      try { await apiArq('parte', { id: ini.id, i, dados }, { prazoMs: 180000 }); ultimoErro = null; break; }
+      try { conferirSessao(); await apiArq('parte', { id: ini.id, i, dados }, { prazoMs: 180000, sessao }); ultimoErro = null; break; }
       catch (e) {
         ultimoErro = e;
         // Erro definitivo (senha, parte inválida, arquivo não iniciado) não
@@ -447,7 +581,8 @@ async function enviarArquivo(file, onProgresso, cancelar) {
     if (ultimoErro) throw ultimoErro;
     if (onProgresso) onProgresso((i + 1) / partes);
   }
-  const fim = await apiArq('finalizar', { id: ini.id });
+  conferirSessao();
+  const fim = await apiArq('finalizar', { id: ini.id }, { sessao });
   return fim.meta || ini.meta;
 }
 
@@ -508,8 +643,9 @@ async function comFila(modo, fn) {
   return new Promise((ok, erro) => {
     const t = db.transaction('fila', modo);
     const r = fn(t.objectStore('fila'));
-    t.oncomplete = () => ok(r && r.result !== undefined ? r.result : r);
-    t.onerror = () => erro(t.error);
+    t.onerror = () => erro(t.error || new Error('Falha ao guardar arquivo'));
+    t.onabort = () => erro(t.error || new Error('Gravação do arquivo cancelada'));
+    t.oncomplete = () => { db.close(); ok(r && r.result !== undefined ? r.result : r); };
   });
 }
 const filaArqGravar = (item) => comFila('readwrite', (st) => st.put(item));
@@ -521,52 +657,80 @@ const filaArqApagar = (id) => comFila('readwrite', (st) => st.delete(id));
    e devolve pendente:true — quem chamou avisa a pessoa, e subirFila() termina o
    serviço quando a internet voltar. */
 async function anexarFoto({ file, colecao, registroId, subLista, subId, campo, onProgresso }) {
-  const alvo = { colecao, registroId, subLista, subId, campo: campo || 'fotos' };
+  const dono = donoFila();
+  if (!dono) throw new Error('Entre novamente antes de anexar.');
+  const item = { id: 'fa-' + novaOperacao(), dono, blob: file, nome: file.name, mime: file.type,
+    em: new Date().toISOString(), colecao, registroId, subLista, subId, campo: campo || 'fotos' };
+  // Nem o envio online elimina a cópia local antes de o registro confirmar o vínculo.
+  await filaArqGravar(item);
+  await fotosAindaNoAparelho();
+  if (donoFila() !== dono) return { id: null, pendente: true, filaId: item.id };
   try {
     const meta = await enviarArquivo(file, onProgresso);
-    return { id: meta.id, pendente: false };
-  } catch (e) {
-    const id = 'fa' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    try {
-      await filaArqGravar(Object.assign({ id, blob: file, nome: file.name, mime: file.type, em: new Date().toISOString() }, alvo));
-      return { id: null, pendente: true, filaId: id };
-    } catch (e2) {
-      // Sem IndexedDB (modo privado de alguns navegadores) não dá para prometer
-      // o que não vai ser cumprido: devolve o erro de verdade.
-      throw e;
-    }
-  }
+    item.arquivoId = meta.id;
+    await filaArqGravar(item);
+    return { id: meta.id, pendente: false, filaId: item.id };
+  } catch { return { id: null, pendente: true, filaId: item.id }; }
 }
 
-/* Sobe o que ficou para trás e COSTURA o id no registro certo. */
+let _subindoArquivos = false;
 async function subirArquivosPendentes() {
-  if (!navigator.onLine || !S.senhaHash) return;
-  let pendentes = [];
-  try { pendentes = (await filaArqListar()) || []; } catch { return; }
+  if (_subindoArquivos || !navigator.onLine || !S.senhaHash) return;
+  _subindoArquivos = true;
+  const dono = donoFila();
+  try {
+    if (navigator.locks) await navigator.locks.request('domo-fotos-' + dono, () => enviarArquivosDaSessao(dono));
+    else await enviarArquivosDaSessao(dono);
+  } finally { _subindoArquivos = false; await fotosAindaNoAparelho(); document.dispatchEvent(new CustomEvent('domo:status')); }
+}
+async function enviarArquivosDaSessao(dono) {
+  let pendentes;
+  try { pendentes = (await filaArqListar()) || []; }
+  catch { S.erroArquivos = 'Não foi possível abrir as fotos guardadas neste aparelho.'; return; }
+  S.erroArquivos = '';
   for (const item of pendentes) {
+    if (!item.dono) { S.erroArquivos = 'Há fotos antigas sem dono identificado. Recupere-as em Pendências.'; continue; }
+    if (item.dono !== dono || donoFila() !== dono) continue;
     try {
-      const meta = await enviarArquivo(new File([item.blob], item.nome || 'foto.jpg', { type: item.mime || 'image/jpeg' }));
-      const reg = achar(item.colecao, item.registroId);
-      if (reg) {
-        const copia = Object.assign({}, reg);
-        const lista = (copia[item.subLista] || []).map((x) => {
-          if (x.id !== item.subId) return x;
-          const y = Object.assign({}, x);
-          y[item.campo] = [...(y[item.campo] || []), meta.id];
-          y.fotosPendentes = Math.max(0, (Number(y.fotosPendentes) || 0) - 1);
-          return y;
-        });
-        copia[item.subLista] = lista;
+      let reg = achar(item.colecao, item.registroId);
+      let sub = reg && (reg[item.subLista] || []).find(x => x.id === item.subId);
+      if (!reg || reg.apagadoEm || !sub || sub.apagadoEm) { S.erroArquivos = 'Foto guardada: o recebimento ainda não está disponível para vincular.'; continue; }
+      if (!item.arquivoId) {
+        const meta = await enviarArquivo(new File([item.blob], item.nome || 'foto.jpg', { type: item.mime || 'image/jpeg' }));
+        item.arquivoId = meta.id;
+        await filaArqGravar(item); // retomada reaproveita o upload já confirmado
+      }
+      if (donoFila() !== dono) return;
+      reg = achar(item.colecao, item.registroId);
+      sub = reg && (reg[item.subLista] || []).find(x => x.id === item.subId);
+      if (!sub) continue;
+      if (!(sub[item.campo] || []).includes(item.arquivoId)) {
+        const copia = Object.assign({}, reg, { [item.subLista]: reg[item.subLista].map(x => x.id !== item.subId ? x : Object.assign({}, x, {
+          [item.campo]: [...new Set([...(x[item.campo] || []), item.arquivoId])],
+          fotosPendentes: Math.max(0, (Number(x.fotosPendentes) || 0) - 1)
+        })) });
         salvar(item.colecao, copia, { semSubir: true });
       }
-      await filaArqApagar(item.id);
-    } catch (e) {
-      break;   // sem sinal ainda: tenta de novo no próximo ciclo
-    }
+      await subirFila();
+      atualizarFila();
+      reg = achar(item.colecao, item.registroId);
+      sub = reg && (reg[item.subLista] || []).find(x => x.id === item.subId);
+      const aguardando = S.fila.some(f => f.colecao === item.colecao && f.registro.id === item.registroId);
+      if (!aguardando && sub && (sub[item.campo] || []).includes(item.arquivoId)) await filaArqApagar(item.id);
+      else S.erroArquivos = 'Foto guardada no aparelho; aguardando confirmação do vínculo no servidor.';
+    } catch (e) { S.erroArquivos = 'Foto preservada no aparelho: ' + (e.message || 'envio pendente'); break; }
   }
 }
 
 /* ── Rede ──────────────────────────────────────────────────────────────────── */
+window.addEventListener('storage', (e) => {
+  if (e.key && (e.key.startsWith(PREFIXO_FILA) || e.key === K.fila)) {
+    try { migrarFilaAntiga(); restaurarPendencias(); } catch { /* mantém origem */ }
+    document.dispatchEvent(new CustomEvent('domo:status'));
+    // Não redesenha o formulário que a outra aba está preenchendo.
+    document.dispatchEvent(new CustomEvent('domo:dados'));
+  }
+});
 window.addEventListener('online', () => { S.online = true; subirFila(); puxar(); });
 window.addEventListener('offline', () => { S.online = false; document.dispatchEvent(new CustomEvent('domo:status')); });
 document.addEventListener('visibilitychange', () => {

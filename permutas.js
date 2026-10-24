@@ -57,7 +57,7 @@ const ladoPermuta = (t) => LADOS_PERMUTA[t] || LADOS_PERMUTA.entrega;
 const permutas = () => lista('permuta');
 const vivosP = (arr) => (arr || []).filter((x) => x && !x.apagadoEm);
 const idP = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-const cent = (n) => Math.round((Number(n) || 0) * 100) / 100;
+const cent = moedaCentavos;
 
 /* O que a ordem vale para a permuta.
    OC: o líquido — é o que a Domo se comprometeu a pagar, já com imposto, frete
@@ -288,8 +288,9 @@ function extratoDaPermuta(p) {
 }
 
 // A frase que acompanha o número — o saldo nunca aparece sozinho.
-function fraseDoSaldo(saldo) {
-  if (Math.abs(saldo) < 0.01) return { txt: 'permuta quitada', cls: '' };
+function fraseDoSaldo(saldo, resumo) {
+  if (resumo && !(resumo.linhas || []).length && !(resumo.lancamentos || []).length) return { txt: 'sem lançamentos', cls: '' };
+  if (Math.abs(saldo) < 0.01) return { txt: 'saldo zerado', cls: '' };
   return saldo > 0
     ? { txt: 'a Domo ainda deve', cls: 'et-vencendo' }
     : { txt: 'o parceiro ainda deve entregar', cls: 'et-valido' };
@@ -347,7 +348,7 @@ TELAS.permutas = function (el, args) {
 
     (visiveis.length
       ? visiveis.map((p) => {
-          const f = fraseDoSaldo(p.saldo);
+          const f = fraseDoSaldo(p.saldo, p);
           const alertas = [p.mudaram ? p.mudaram + ' valor(es) mudaram' : '',
             p.sumiram ? p.sumiram + ' ordem(ns) cancelada(s)' : '',
             p.semConferir ? 'não deu para conferir' : ''].filter(Boolean);
@@ -388,7 +389,7 @@ function telaPermuta(el, id) {
   const p = achar('permuta', id);
   if (!p || p.apagadoEm) { cabecalho('Permuta', ''); el.innerHTML = vazio('🤔', 'Não encontrada'); return; }
   const r = resumoDaPermuta(p);
-  const f = fraseDoSaldo(r.saldo);
+  const f = fraseDoSaldo(r.saldo, r);
 
   cabecalho('🤝 ' + (p.nome || 'Permuta'),
     (p.parceiros || []).map((x) => x.nome).join(' · ') + (p.encerrada ? ' · ENCERRADA' : ''),
@@ -841,7 +842,7 @@ async function pdfPermuta(p) {
   doc.setFillColor(234, 234, 234); doc.rect(M, y - 4, UTIL, 20, 'F');
   linha('Recebemos do parceiro', fmt.brl(e.balanca.recebemos), true);
   linha('Entregamos ao parceiro', fmt.brl(e.balanca.entregamos), true);
-  const f = fraseDoSaldo(e.saldo);
+  const f = fraseDoSaldo(e.saldo, e);
   linha('Diferença — ' + f.txt.toUpperCase(), fmt.brl(Math.abs(e.saldo)), true);
   y += 8;
 

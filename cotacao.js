@@ -6,8 +6,14 @@
 const cotacoes = () => lista('cot');
 
 const totalCotacao = (c, f) =>
-  (c.itens || []).reduce((s, i) => s + (Number((f.precos || {})[i.id]) || 0) * (Number(i.qtd) || 0), 0) +
-  (Number(f.frete) || 0);
+  moedaCentavos((c.itens || []).reduce((s, i) => s + moedaCentavos((Number((f.precos || {})[i.id]) || 0) * (Number(i.qtd) || 0)), 0) +
+  moedaCentavos(f.frete));
+
+function erroValoresCotacao(f) {
+  if (Number(f.frete) < 0) return 'O frete não pode ser negativo.';
+  if (Object.values(f.precos || {}).some((v) => Number(v) < 0)) return 'O preço não pode ser negativo.';
+  return '';
+}
 
 const respondeu = (f) => !!f.respondidoEm;
 
@@ -274,12 +280,12 @@ function telaCotacao(el, id) {
       '</tr></thead><tbody>' +
       (c.itens || []).map((i) =>
         '<tr><td>' + esc(i.descricao) + '</td>' +
-        '<td class="num">' + fmt.numero(i.qtd) + ' ' + esc(i.unid || '') + '</td>' +
+        '<td class="num">' + fmt.quantidade(i.qtd) + ' ' + esc(i.unid || '') + '</td>' +
         fs.map((f) => {
           const p = Number((f.precos || {})[i.id]) || 0;
           const eMelhor = p > 0 && melhor[i.id] === p;
           return '<td class="num"' + (eMelhor ? ' style="color:var(--verde);font-weight:700"' : '') + '>' +
-            (p > 0 ? fmt.brl(p) : '—') + '</td>';
+            (p > 0 ? fmt.unitario(p) : '—') + '</td>';
         }).join('') + '</tr>').join('') +
       '</tbody><tfoot>' +
         '<tr><td colspan="2">Frete</td>' +
@@ -483,7 +489,7 @@ function pedirPrecoWhats(c, f) {
     '*' + ((S.cfg.empresa || {}).nomeCurto || 'Domo Construtora') + '* — Pedido de cotação *' + (c.codigo || '') + '*',
     'Obra: ' + (c.obra || ''),
     '',
-    ...(c.itens || []).map((i, n) => (n + 1) + '. ' + i.descricao + ' — ' + fmt.numero(i.qtd) + ' ' + (i.unid || '')),
+    ...(c.itens || []).map((i, n) => (n + 1) + '. ' + i.descricao + ' — ' + fmt.quantidade(i.qtd) + ' ' + (i.unid || '')),
     '',
     c.prazoResposta ? 'Precisamos da resposta até ' + fmt.data(c.prazoResposta) + '.' : '',
     c.observacoes || '',
@@ -623,7 +629,7 @@ async function telaCotarPublico(args) {
           c.itens.map((i) =>
             '<div class="med-linha" data-item="' + esc(i.id) + '">' +
               '<div class="med-etapa"><b>' + esc(i.descricao) + '</b></div>' +
-              '<div class="med-ant"><span class="med-rot">Quantidade</span>' + fmt.numero(i.qtd) + ' ' + esc(i.unid || '') + '</div>' +
+              '<div class="med-ant"><span class="med-rot">Quantidade</span>' + fmt.quantidade(i.qtd) + ' ' + esc(i.unid || '') + '</div>' +
               '<div class="med-perc"><span class="med-rot">Preço unitário (R$)</span>' +
                 '<input type="text" inputmode="decimal" data-preco="' + esc(i.id) + '" ' +
                 'value="' + esc(meu.precos[i.id] != null ? String(meu.precos[i.id]).replace('.', ',') : '') + '" placeholder="0,00"></div>' +
@@ -652,13 +658,14 @@ async function telaCotarPublico(args) {
     let total = 0;
     for (const i of c.itens) {
       const inp = document.querySelector('[data-preco="' + i.id + '"]');
-      const v = numeroBR(inp ? inp.value : 0) * (Number(i.qtd) || 0);
+      const v = moedaCentavos(numeroBR(inp ? inp.value : 0) * (Number(i.qtd) || 0));
       total += v;
       const cel = document.querySelector('[data-tot="' + i.id + '"]');
       if (cel) cel.textContent = fmt.brl(v);
     }
-    total += numeroBR(document.getElementById('rFrete').value);
-    document.getElementById('rTotal').textContent = fmt.brl(total);
+    const frete = numeroBR(document.getElementById('rFrete').value);
+    total = moedaCentavos(total + frete);
+    document.getElementById('rTotal').textContent = frete < 0 ? 'Confira o frete' : fmt.brl(total);
   };
   document.querySelectorAll('[data-preco]').forEach((i) => i.addEventListener('input', recalc));
   document.getElementById('rFrete').addEventListener('input', recalc);
@@ -670,7 +677,15 @@ async function telaCotarPublico(args) {
     const precos = {};
     for (const i of c.itens) {
       const v = numeroBR(document.querySelector('[data-preco="' + i.id + '"]').value);
+      if (v < 0) { erro.innerHTML = '<div class="aviso ruim">O preço não pode ser negativo.</div>'; return; }
       if (v > 0) precos[i.id] = v;
+    }
+    const frete = numeroBR(document.getElementById('rFrete').value);
+    const invalido = erroValoresCotacao({ precos, frete });
+    if (invalido) {
+      erro.innerHTML = '<div class="aviso ruim">' + esc(invalido) + '</div>';
+      document.getElementById('rFrete').focus();
+      return;
     }
     if (!Object.keys(precos).length) {
       erro.innerHTML = '<div class="aviso ruim">Informe o preço de pelo menos um item.</div>';
@@ -681,7 +696,7 @@ async function telaCotarPublico(args) {
     try {
       const resp = await api('responderCotacao', {
         id, t: token, precos,
-        frete: numeroBR(document.getElementById('rFrete').value),
+        frete,
         prazoEntrega: document.getElementById('rPrazo').value,
         condicaoPagamento: document.getElementById('rCond').value,
         validade: document.getElementById('rVal').value,
